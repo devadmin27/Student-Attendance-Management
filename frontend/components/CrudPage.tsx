@@ -215,11 +215,13 @@ export default function CrudPage<T extends { id: string }>({
   const buildPayload = (mode: "create" | "update"): Record<string, unknown> => {
     const payload: Record<string, unknown> = {};
     for (const f of listFields) {
-      if (mode === "create" && f.createOnly) continue;
+      // createOnly fields (e.g. passwords) are sent on create, skipped on update.
+      if (f.createOnly && mode === "update") continue;
       const raw = form[f.name];
-      if (mode === "update" && f.createOnly) continue;
       const value = serializeValue(f, raw);
-      if (mode === "update" && value === null && !(f.required ?? false)) continue; // skip clearing empties on PATCH
+      // Skip optional empty values (null) in both modes — sending null to a
+      // non-nullable serializer field turns an empty form into a 400.
+      if (value === null && !(f.required ?? false)) continue;
       if (mode === "update" && f.type === "select" && value === null) {
         // PATCH null for nullable FK fields must still be sent when touched.
         payload[f.name] = null;

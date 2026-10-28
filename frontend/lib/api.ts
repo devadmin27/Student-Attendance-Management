@@ -138,12 +138,15 @@ export async function samsRequest<T>(
   config: Parameters<AxiosInstance["request"]>[0],
 ): Promise<SamsResponse<T>> {
   const response = await api.request<SamsEnvelope<T>>(config);
-  if (!response.data.success) {
-    throw new ApiError(
-      response.data.message,
-      response.data.code ?? "ERROR",
-      response.status,
-    );
+  // 204 (and any empty-body success) has no envelope — treat as success.
+  if (response.data && typeof response.data === "object" && "success" in response.data) {
+    if (!response.data.success) {
+      throw new ApiError(
+        response.data.message,
+        response.data.code ?? "ERROR",
+        response.status,
+      );
+    }
   }
-  return { data: response.data.data as T, envelope: response.data };
+  return { data: (response.data?.data ?? undefined) as T, envelope: response.data ?? { success: true, message: "" } };
 }

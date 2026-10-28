@@ -2,6 +2,7 @@
 import csv
 import io
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -51,7 +52,13 @@ class UserViewSet(viewsets.ModelViewSet):
         """Soft-style deletion: deactivate instead of deleting users that
         already have attendance history (referential integrity, spec §7.3)."""
         user = self.get_object()
-        has_history = user.student_profile and user.student_profile.attendance_records.exists()
+        # Reverse OneToOne without an existing profile raises
+        # RelatedObjectDoesNotExist (e.g. instructor accounts) — never 500.
+        try:
+            student_profile = user.student_profile
+        except ObjectDoesNotExist:
+            student_profile = None
+        has_history = student_profile is not None and student_profile.attendance_records.exists()
         if getattr(request.user, "pk", None) == user.pk:
             return Response(
                 {"success": False, "message": "ไม่สามารถลบบัญชีของตนเองได้", "code": "FORBIDDEN"},
