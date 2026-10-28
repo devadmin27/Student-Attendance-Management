@@ -126,14 +126,26 @@ api.interceptors.response.use(
       detail?.message ??
       (status === 429 ? "คำขอถึงขีดจำกัด กรุณารอสักครู่" : "เกิดข้อผิดพลาดในการเชื่อมต่อระบบ");
     const code = detail?.code ?? "NETWORK_ERROR";
+    const summary = summarizeValidationErrors(detail?.errors);
 
     return Promise.reject(
-      new ApiError(message, code, status ?? 500),
+      new ApiError(summary ? `${message} — ${summary}` : message, code, status ?? 500),
     );
   },
 );
 
 /** Typed wrapper returning payload + envelope. */
+// ---- In-memory helper: summarize field-level validation errors ----
+function summarizeValidationErrors(errors: unknown): string {
+  if (!errors || typeof errors !== "object") return typeof errors === "string" ? errors : "";
+  const parts: string[] = [];
+  for (const [field, messages] of Object.entries(errors as Record<string, unknown>)) {
+    const list = Array.isArray(messages) ? messages : [messages];
+    parts.push(`${field}: ${list.join(", ")}`);
+  }
+  return parts.join("; ");
+}
+
 export async function samsRequest<T>(
   config: Parameters<AxiosInstance["request"]>[0],
 ): Promise<SamsResponse<T>> {
@@ -141,8 +153,9 @@ export async function samsRequest<T>(
   // 204 (and any empty-body success) has no envelope — treat as success.
   if (response.data && typeof response.data === "object" && "success" in response.data) {
     if (!response.data.success) {
+      const detail = summarizeValidationErrors(response.data.errors);
       throw new ApiError(
-        response.data.message,
+        detail ? `${response.data.message} — ${detail}` : response.data.message,
         response.data.code ?? "ERROR",
         response.status,
       );
