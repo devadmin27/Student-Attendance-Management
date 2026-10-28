@@ -139,3 +139,44 @@ npm start           # port 3000 — ให้ reverse proxy ชี้โดเ�
 
 Backend env เมื่อ frontend ต่างโดเมน:
 `DJANGO_CORS_ALLOWED_ORIGINS = https://sams.scphtrang.ac.th,https://sams-app.scphtrang.ac.th`
+
+## 9. Deploy บน Coolify แบบ Docker Compose — โดเมนเดียวร่วมกัน
+
+ตอบโจทย์: frontend + backend อยู่ **resource เดียว** กัน และใช้โดเมนร่วม `https://sams.scphtrang.ac.th`
+
+### ไฟล์ที่เกี่ยวข้อง
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `docker-compose.production.yml` | 3 services: `proxy` (nginx), `backend` (Django, reuse Dockerfile ราก), `frontend` (Next.js, reuse frontend/Dockerfile) |
+| `nginx/sams.conf` | กฎ route: `^/(api\|admin)\|static)/` → Django :8000 เส้นทางอื่น → Next.js :3000 |
+
+### ตั้งบน Coolify
+
+1. **New Resource → Docker Compose** ชี้ repo นี้ (branch `main`), Compose file path: `/docker-compose.production.yml`
+2. **Environment Variables** (ระดับ resource) — ชุดเดิม: `DJANGO_SECRET_KEY`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_SSLMODE=disable`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_CORS_ALLOWED_ORIGINS`
+3. **Domains** — ตั้ง domain ให้ **service `proxy`** เป็น `https://sams.scphtrang.ac.th` (ล้าง domain เก่าที่ผูกกับ resource ที่แยกไว้ก่อนหน้านี้ เพื่อไม่ให้ชนกัน — โดเมนเดียวถูกต้องต่อ proxy เดียว)
+4. Deploy
+
+### ความจริงเรื่องโดเมนที่ต้องปรับ (สำคัญ)
+
+- โดเมน `sams.scphtrang.ac.th` ที่(trardเก่า) **ผูกกับ Django resource รอบแรก** — หากเปลี่ยนไปใช้ compose resource:
+  - เอา domain ออกจาก resource เก่า (หรือลบ resource เก่าทั้งโปรเจกต์ — ตัดสิ้นความจำ 1 นาทีโดยมี downtimew เสี้ยวน้อย)
+  - จด Coolify proxy ที่ resource ใหม่ เรียบร้อยแล้วเท่านั้น
+- โชคดี: DNS (Cloudflare) ไม่ต้องแก้ — ชี้เครื่อง Coolify เดียวกัน
+
+### การหยุดระดับ HTTPS (ที่ทำงานเบื้องหลัง)
+
+`樣proxy` chain จริง: **Cloudflare (HTTPS ปลายหน้า) → Coolify Traefik → nginx ใน compose → service ภายใน** — Django ที่ได้รับ `X-Forwarded-Proto: https` (ตั้ง `SECURE_PROXY_SSL_HEADER` กข้อความ (`settings.py` **โค้ดมีแล้ว** เมื่อ DEBUG=False — ไม่ต้องแก้) ใช้เรียก API เป็น same-origin จาก browser จึงไม่มีปัญหา CORS
+
+### ทดสอบหลัง deploy (เปิดตาม server log)
+
+1. `https://sams.scphtrang.ac.th/` → หน้า **front** (login SAMS) — แทนที่จะเป็น Django 404
+2. `https://sams.scphtrang.ac.th/api/v1/health/` → `database: "connected"`
+3. `https://sams.scphtrang.ac.th/admin/` → หน้า login Django admin ไอยขอมี branding
+4. login frontend → เข้า dashboard ทุก role
+
+### ข้อจำกัดที่ยืนยัน/ไม่ยืนยัน
+
+- ✅ nginx config เขียนตามต้นฉบับกฎ routing จาก compose, อิมเมจ backend/frontend reuse จาก Dockerfile เดิมที่ทดสอบ build ผ่านท้องถิ่น
+- ⚠️ `docker compose -f docker-compose.production.yml up` ในเครื่องยังไม่ได้รัน (Docker Desktop ปิด) — ผลจริงบน Coolify ต้องติดตามที่ log แล้วกลับมารายงาน ป. ตามที่บันทึกไว้ตามข้อ 8
