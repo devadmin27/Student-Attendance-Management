@@ -35,6 +35,8 @@
 ## 3. UI ทดสอบจริงใน Browser (localhost:3000, Chromium)
 
 ### Admin (login → dashboard)
+| สร้างบัญชีผู้ใช้ยืนยันจริง (UI) | ✅ — admin/instructor/student สร้างสำเร็จสังเกต toast "เพิ่มข้อมูลสำเร็จ", role แสดงถูกหมวด; รหัสอ่อน/ชื่อซ้ำ → toast โชว์สาเหตุราย field; email ว่างผ่าน |
+| ลบบัญชีผู้ใช้ (UI) | ✅ — instructor ที่ไม่มี profile → 204 + toast สำเร็จ (หลังแก้ bug #6/#7); ลบตัวเอง → กันด้วย 400 "ไม่สามารถลบตัวของตัวเองได้" |
 - ✅ กราฟ 2 ชุด (recharts) + การ์ดสถิติ; หน้า users แสดง 11 users
 - ✅ students + ฟอร์ม CSV import · audit-logs (20 rows) · reports (6 rows + ปุ่ม export) · attendance-records (20 rows) · attendance-sessions (18 rows)
 
@@ -78,6 +80,11 @@
 | 2 | session เคยค้างสถานะ paused และไม่เปิดใหม่ด้วย `open` | state transition ไม่รองรับ `paused → open` | service `open_session` ปรับให้รองรับ `paused → open` | ⏸ → ▶ ทำงานเต็มรอบใน UI |
 | 3 | refresh token ถูก rotate ซ้อนหลายครั้งต่อ session เดียว | frontend เรียก refresh หลายแหล่งพร้อมกัน | `refreshSession()` single-flight · AuthContext เรียกผ่านตัวเดียว | reload ×2 — session ค้าง ไม่ force logout |
 | 4 | import ภาษาไทยเห็นเป็น `?` บน Windows | PowerShell console encoding ทำค่า display ผิด | ใช้สคริปต์ Python (UTF-8) + ไฟล์ BOM สำหรับ verify — ไบต์ใน DB จริงถูก (ยืนยันด้วย Python) | ข้อมูลไทยเก็บและแสดงผลถูก |
+
+| 5 | สร้างบัญชีจาก UI → 400 ข้อมูลที่ส่งมาไม่ถูกต้อง | `CrudPage.buildPayload` เงื่อนไขกลับด้าน — ข้าม `createOnly` fields (password) บน create + optional ว่างถูกส่งเป็น `null` ("ฟิลด์นี้จำเป็นต้องมีค่า") | ส่ง createOnly บน create, ข้าม null ของ optional ทั้ง create/update (`frontend/components/CrudPage.tsx`) | ✅ POST 201 จริงผ่าน UI |
+| 6 | ลบบัญชี instructor → 500 | reverse OneToOne ที่ไม่มี profile (`user.student_profile`) raise `RelatedObjectDoesNotExist` | guard `except ObjectDoesNotExist` ใน `destroy` (`apps/accounts/views.py`) | ✅ DELETE 204 จริงผ่าน UI |
+| 7 | ลบสำเร็จ (204) แต่ UI โชว์ "ลบข้อมูลไม่สำเร็จ" | frontend บังคับ envelope `success: true` — 204 ไม่มี body | `samsRequest` ยอมรับ 204/empty envelope (`frontend/lib/api.ts`) | ✅ DELETE 204 → toast "ลบข้อมูลสำเร็จ" |
+| 8 | error validation โชว์เพียงข้อความรวม ๆ | toast แสดงเฉพาะ `message` โดยไม่รวม `errors` ราย field | summarize `errors` per-field แล้ว concat ทั้ง `samsRequest` และ response interceptor (`frontend/lib/api.ts`) | ✅ ทดสอบ: weak password → "password: This password is too common.", duplicate username → "username: ชื่อผู้ใช้นั้นได้ถูกใช้ไปแล้ว" |
 
 ## 7. ข้อสังเกตสภาพแวดล้อมผลิต
 
