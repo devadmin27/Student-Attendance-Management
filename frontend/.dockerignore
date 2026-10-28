@@ -1,0 +1,5 @@
+# keep dev artifacts out of the image
+node_modules
+.next
+.env
+*.log

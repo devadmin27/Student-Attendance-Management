@@ -119,3 +119,23 @@ npm start           # port 3000 — ให้ reverse proxy ชี้โดเ�
 
 `CompressedManifestStaticFilesStorage` ให้บรอว์เซอร์ cache ตาม fingerprint hash — ต้องเรียก `{% static %}` ผ่าน template (Django admin ใช้แบบนี้อยู่แล้ว) และ manifest file (`staticfiles.json`) ถูก bake ลงอิมเมจแล้วเพราะ collectstatic รันด้วย `DEBUG=False` ตอน build
 
+### Deploy frontend (Next.js) บน Coolify แยกอีก app หนึ่ง
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `frontend/Dockerfile` | อิมเมจผลิต Next.js แบบ **standalone** (multi-stage: deps → build → runner, node:22-slim) |
+| `frontend/.dockerignore` | กัน `node_modules` / `.next` / `.env` ลง build context |
+| `frontend/next.config.ts` | เปิด `output: "standalone"` |
+
+ค่าที่ตั้งบน Coolify (app ใหม่, Dockerfile path `/frontend/Dockerfile`):
+
+- **Domain:** โดเมนของ frontend เช่น `sams-app.scphtrang.ac.th`
+- **Build args:** `NEXT_PUBLIC_API_BASE_URL=https://sams.scphtrang.ac.th/api/v1` (ค่า NEXT_PUBLIC_* ถูก bake ตอน build — **แก้แล้วต้อง Rebuild ไม่ใช่ restart**)
+- **Port:** `3000` (CMD อ่าน `${PORT:-3000}`)
+
+สิ่งที่ทดสอบจริงแล้ว:
+- ✅ `npm run build` ผ่านครบทุก route (Next 16.4.3 + output standalone; ไฟล์ `server.js` ถูกสร้างจริงที่ `.next/standalone/`)
+- ⚠️ ยังไม่ได้รัน `docker build` ในเครื่อง — ผลบน Coolify ต้องติดตาม log แล้วอ้างอิงส่วนท้าย §8
+
+Backend env เมื่อ frontend ต่างโดเมน:
+`DJANGO_CORS_ALLOWED_ORIGINS = https://sams.scphtrang.ac.th,https://sams-app.scphtrang.ac.th`
