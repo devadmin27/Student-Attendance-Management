@@ -1,0 +1,5093 @@
+openapi: 3.0.3
+info:
+  title: SAMS API — Student Attendance Management System
+  version: 1.0.0
+  description: REST API ของระบบบริหารจัดการการเข้าเรียนผ่าน QR Code (SAMS)
+paths:
+  /api/v1/academic-terms/:
+    get:
+      operationId: academic_terms_list
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - in: query
+        name: is_current
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - academic-terms
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAcademicTermList'
+          description: ''
+    post:
+      operationId: academic_terms_create
+      tags:
+      - academic-terms
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTerm'
+          description: ''
+  /api/v1/academic-terms/{id}/:
+    get:
+      operationId: academic_terms_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this academic term.
+        required: true
+      tags:
+      - academic-terms
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTerm'
+          description: ''
+    put:
+      operationId: academic_terms_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this academic term.
+        required: true
+      tags:
+      - academic-terms
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AcademicTermRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTerm'
+          description: ''
+    patch:
+      operationId: academic_terms_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this academic term.
+        required: true
+      tags:
+      - academic-terms
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAcademicTermRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAcademicTermRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAcademicTermRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcademicTerm'
+          description: ''
+    delete:
+      operationId: academic_terms_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this academic term.
+        required: true
+      tags:
+      - academic-terms
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/attendance/check-in/:
+    post:
+      operationId: attendance_check_in_create
+      description: Student QR check-in. Only the scanned token is accepted from the
+        body.
+      summary: เช็คชื่อผ่าน QR Token
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckInRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CheckInRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CheckInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckInResult'
+          description: ''
+  /api/v1/attendance/my-history/:
+    get:
+      operationId: attendance_my_history_list
+      description: |-
+        My attendance history — ownership enforced: always scoped to
+        request.user's own student profile.
+      summary: ประวัติการเช็คชื่อของตนเอง
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AttendanceRecord'
+          description: ''
+  /api/v1/attendance/records/:
+    get:
+      operationId: attendance_records_list
+      description: Attendance records list (admin/instructor full scope; students
+        own only).
+      parameters:
+      - in: query
+        name: attendance_session
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: attendance_session__course_offering
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: checked_in_at__gte
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: checked_in_at__lte
+        schema:
+          type: string
+          format: date-time
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะ
+          enum:
+          - absent
+          - excused
+          - late
+          - present
+        description: |-
+          * `present` - เข้าเรียน
+          * `late` - มาสาย
+          * `absent` - ขาดเรียน
+          * `excused` - ลา/ได้รับอนุญาต
+      - in: query
+        name: student
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAttendanceRecordList'
+          description: ''
+  /api/v1/attendance/records/{id}/:
+    get:
+      operationId: attendance_records_retrieve
+      description: Attendance records list (admin/instructor full scope; students
+        own only).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this attendance record.
+        required: true
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceRecord'
+          description: ''
+    patch:
+      operationId: attendance_records_partial_update
+      description: Attendance records list (admin/instructor full scope; students
+        own only).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this attendance record.
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceRecordUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceRecordUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceRecordUpdateRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceRecordUpdate'
+          description: ''
+  /api/v1/attendance/sessions/:
+    get:
+      operationId: attendance_sessions_list
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAttendanceSessionList'
+          description: ''
+    post:
+      operationId: attendance_sessions_create
+      description: Only the offering's instructor (or admin) may create a session.
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSessionCreate'
+          description: ''
+  /api/v1/attendance/sessions/{id}/:
+    get:
+      operationId: attendance_sessions_retrieve
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+    put:
+      operationId: attendance_sessions_update
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+    patch:
+      operationId: attendance_sessions_partial_update
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAttendanceSessionRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+    delete:
+      operationId: attendance_sessions_destroy
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/attendance/sessions/{id}/cancel/:
+    post:
+      operationId: attendance_sessions_cancel_create
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/attendance/sessions/{id}/close/:
+    post:
+      operationId: attendance_sessions_close_create
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/attendance/sessions/{id}/open/:
+    post:
+      operationId: attendance_sessions_open_create
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/attendance/sessions/{id}/pause/:
+    post:
+      operationId: attendance_sessions_pause_create
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/attendance/sessions/{id}/qr-token/:
+    post:
+      operationId: attendance_sessions_qr_token_create
+      description: Issue/rotate the on-screen QR token for this live session.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttendanceSessionRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/attendance/sessions/{id}/roster/:
+    get:
+      operationId: attendance_sessions_roster_retrieve
+      description: Create/read sessions; lifecycle managed via /open /pause /close
+        /cancel.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - attendance
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceSession'
+          description: ''
+  /api/v1/audit-logs/:
+    get:
+      operationId: audit_logs_list
+      parameters:
+      - in: query
+        name: action
+        schema:
+          type: string
+      - in: query
+        name: actor
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: resource_type
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - audit-logs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditLogList'
+          description: ''
+  /api/v1/audit-logs/{id}/:
+    get:
+      operationId: audit_logs_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this audit log.
+        required: true
+      tags:
+      - audit-logs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLog'
+          description: ''
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: |-
+        Takes a set of user credentials and returns an access and refresh JSON web
+        token pair to prove the authentication of those credentials.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SAMSLoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SAMSLoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SAMSLoginRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: Revoke the presented refresh token (cookie-first, then body).
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+          description: ''
+  /api/v1/auth/me/:
+    get:
+      operationId: auth_me_retrieve
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+  /api/v1/auth/refresh/:
+    post:
+      operationId: auth_refresh_create
+      description: |-
+        Rotate refresh token; supports cookie or body token.
+
+        Blacklist-after-rotation (settings) makes a previously used refresh token
+        unusable — token reuse is rejected with 401 and audited.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RefreshRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RefreshRequestRequest'
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+          description: ''
+  /api/v1/class-groups/:
+    get:
+      operationId: class_groups_list
+      parameters:
+      - in: query
+        name: academic_year_level
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: program
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - class-groups
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedClassGroupList'
+          description: ''
+    post:
+      operationId: class_groups_create
+      tags:
+      - class-groups
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassGroup'
+          description: ''
+  /api/v1/class-groups/{id}/:
+    get:
+      operationId: class_groups_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class group.
+        required: true
+      tags:
+      - class-groups
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassGroup'
+          description: ''
+    put:
+      operationId: class_groups_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class group.
+        required: true
+      tags:
+      - class-groups
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClassGroupRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassGroup'
+          description: ''
+    patch:
+      operationId: class_groups_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class group.
+        required: true
+      tags:
+      - class-groups
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedClassGroupRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedClassGroupRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedClassGroupRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassGroup'
+          description: ''
+    delete:
+      operationId: class_groups_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class group.
+        required: true
+      tags:
+      - class-groups
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/class-schedules/:
+    get:
+      operationId: class_schedules_list
+      parameters:
+      - in: query
+        name: course_offering
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะตารางเรียน
+          enum:
+          - active
+          - cancelled
+          - planned
+        description: |-
+          * `planned` - กำหนดการ
+          * `active` - ใช้งานอยู่
+          * `cancelled` - ยกเลิก
+      - in: query
+        name: weekday
+        schema:
+          type: integer
+          title: วันเรียนวันที่
+          enum:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+        description: |-
+          * `0` - จันทร์
+          * `1` - อังคาร
+          * `2` - พุธ
+          * `3` - พฤหัสบดี
+          * `4` - ศุกร์
+          * `5` - เสาร์
+          * `6` - อาทิตย์
+      tags:
+      - class-schedules
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedClassScheduleList'
+          description: ''
+    post:
+      operationId: class_schedules_create
+      tags:
+      - class-schedules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSchedule'
+          description: ''
+  /api/v1/class-schedules/{id}/:
+    get:
+      operationId: class_schedules_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class schedule.
+        required: true
+      tags:
+      - class-schedules
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSchedule'
+          description: ''
+    put:
+      operationId: class_schedules_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class schedule.
+        required: true
+      tags:
+      - class-schedules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClassScheduleRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSchedule'
+          description: ''
+    patch:
+      operationId: class_schedules_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class schedule.
+        required: true
+      tags:
+      - class-schedules
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedClassScheduleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedClassScheduleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedClassScheduleRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassSchedule'
+          description: ''
+    delete:
+      operationId: class_schedules_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this class schedule.
+        required: true
+      tags:
+      - class-schedules
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/course-offerings/:
+    get:
+      operationId: course_offerings_list
+      parameters:
+      - in: query
+        name: academic_term
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: class_group
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: course
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: instructor
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะ
+          enum:
+          - cancelled
+          - completed
+          - in_progress
+          - open
+        description: |-
+          * `open` - เปิดรับลงทะเบียน
+          * `in_progress` - กำลังเรียน
+          * `completed` - จบภาคเรียนแล้ว
+          * `cancelled` - ยกเลิก
+      tags:
+      - course-offerings
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCourseOfferingList'
+          description: ''
+    post:
+      operationId: course_offerings_create
+      tags:
+      - course-offerings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseOffering'
+          description: ''
+  /api/v1/course-offerings/{id}/:
+    get:
+      operationId: course_offerings_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course offering.
+        required: true
+      tags:
+      - course-offerings
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseOffering'
+          description: ''
+    put:
+      operationId: course_offerings_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course offering.
+        required: true
+      tags:
+      - course-offerings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseOfferingRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseOffering'
+          description: ''
+    patch:
+      operationId: course_offerings_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course offering.
+        required: true
+      tags:
+      - course-offerings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseOfferingRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseOfferingRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseOfferingRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseOffering'
+          description: ''
+    delete:
+      operationId: course_offerings_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course offering.
+        required: true
+      tags:
+      - course-offerings
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/courses/:
+    get:
+      operationId: courses_list
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - courses
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCourseList'
+          description: ''
+    post:
+      operationId: courses_create
+      tags:
+      - courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+          description: ''
+  /api/v1/courses/{id}/:
+    get:
+      operationId: courses_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course.
+        required: true
+      tags:
+      - courses
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+          description: ''
+    put:
+      operationId: courses_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course.
+        required: true
+      tags:
+      - courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CourseRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+          description: ''
+    patch:
+      operationId: courses_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course.
+        required: true
+      tags:
+      - courses
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCourseRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+          description: ''
+    delete:
+      operationId: courses_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this course.
+        required: true
+      tags:
+      - courses
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/dashboard/admin/:
+    get:
+      operationId: dashboard_admin_retrieve
+      description: Admin dashboard numbers (spec §7.1). Real DB queries only.
+      summary: แดชบอร์ดผู้ดูแลระบบ
+      tags:
+      - dashboard
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardData'
+          description: ''
+  /api/v1/dashboard/instructor/:
+    get:
+      operationId: dashboard_instructor_retrieve
+      description: Instructor dashboard — only their own assignments.
+      summary: แดชบอร์ดอาจารย์ (เฉพาะรายวิชาของตนเอง)
+      tags:
+      - dashboard
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardData'
+          description: ''
+  /api/v1/dashboard/student/:
+    get:
+      operationId: dashboard_student_retrieve
+      description: Student dashboard — own data only (IDOR-safe by construction).
+      summary: แดชบอร์ดนักศึกษา (เฉพาะข้อมูลของตนเอง)
+      tags:
+      - dashboard
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardData'
+          description: ''
+  /api/v1/enrollments/:
+    get:
+      operationId: enrollments_list
+      parameters:
+      - in: query
+        name: course_offering
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: enrollment_status
+        schema:
+          type: string
+          title: สถานะการลงทะเบียน
+          enum:
+          - completed
+          - dropped
+          - enrolled
+        description: |-
+          * `enrolled` - กำลังศึกษา
+          * `dropped` - ถอนรายวิชา
+          * `completed` - จบรายวิชา
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: student
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - enrollments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedEnrollmentList'
+          description: ''
+    post:
+      operationId: enrollments_create
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/v1/enrollments/{id}/:
+    get:
+      operationId: enrollments_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+    put:
+      operationId: enrollments_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+    patch:
+      operationId: enrollments_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedEnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedEnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedEnrollmentRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+    delete:
+      operationId: enrollments_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/health/:
+    get:
+      operationId: health_retrieve
+      summary: Health Check — ตรวจสถานะ API และ Database
+      tags:
+      - health
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+          description: ''
+  /api/v1/instructors/:
+    get:
+      operationId: instructors_list
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะ
+          enum:
+          - active
+          - inactive
+          - suspended
+        description: |-
+          * `active` - ใช้งานอยู่
+          * `suspended` - ระงับการใช้งาน
+          * `inactive` - ไม่ใช้งาน
+      tags:
+      - instructors
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInstructorProfileList'
+          description: ''
+    post:
+      operationId: instructors_create
+      tags:
+      - instructors
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructorProfile'
+          description: ''
+  /api/v1/instructors/{id}/:
+    get:
+      operationId: instructors_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this instructor profile.
+        required: true
+      tags:
+      - instructors
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructorProfile'
+          description: ''
+    put:
+      operationId: instructors_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this instructor profile.
+        required: true
+      tags:
+      - instructors
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InstructorProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructorProfile'
+          description: ''
+    patch:
+      operationId: instructors_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this instructor profile.
+        required: true
+      tags:
+      - instructors
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedInstructorProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedInstructorProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedInstructorProfileRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructorProfile'
+          description: ''
+    delete:
+      operationId: instructors_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this instructor profile.
+        required: true
+      tags:
+      - instructors
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/programs/:
+    get:
+      operationId: programs_list
+      parameters:
+      - in: query
+        name: degree_level
+        schema:
+          type: string
+          title: ระดับการศึกษา
+          enum:
+          - bachelor
+          - doctoral
+          - master
+        description: |-
+          * `bachelor` - ปริญญาตรี
+          * `master` - ปริญญาโท
+          * `doctoral` - ปริญญาเอก
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - programs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProgramList'
+          description: ''
+    post:
+      operationId: programs_create
+      tags:
+      - programs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Program'
+          description: ''
+  /api/v1/programs/{id}/:
+    get:
+      operationId: programs_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this program.
+        required: true
+      tags:
+      - programs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Program'
+          description: ''
+    put:
+      operationId: programs_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this program.
+        required: true
+      tags:
+      - programs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProgramRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Program'
+          description: ''
+    patch:
+      operationId: programs_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this program.
+        required: true
+      tags:
+      - programs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProgramRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProgramRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProgramRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Program'
+          description: ''
+    delete:
+      operationId: programs_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this program.
+        required: true
+      tags:
+      - programs
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/reports/attendance/:
+    get:
+      operationId: reports_attendance_retrieve
+      description: |-
+        Per-student report — only CLOSED sessions count toward rates.
+
+        Attendance-rate formula (spec §11.1):
+          rate = (present + late) / (present + late + absent + excused) * 100
+          — Open/Cancelled/Scheduled sessions are excluded entirely.
+      summary: รายงานอัตราการเข้าเรียน (นับเฉพาะคาบปิดแล้ว)
+      tags:
+      - reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendanceReportData'
+          description: ''
+  /api/v1/reports/attendance/export/:
+    get:
+      operationId: reports_attendance_export_retrieve
+      description: CSV export — sanitized against formula injection (spec §16).
+      summary: ส่งออกรายงาน CSV (ป้องกัน formula injection)
+      tags:
+      - reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/students/:
+    get:
+      operationId: students_list
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      parameters:
+      - in: query
+        name: academic_year_level
+        schema:
+          type: integer
+      - in: query
+        name: class_group
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: program
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะ
+          enum:
+          - active
+          - inactive
+          - suspended
+        description: |-
+          * `active` - ใช้งานอยู่
+          * `suspended` - ระงับการใช้งาน
+          * `inactive` - ไม่ใช้งาน
+      tags:
+      - students
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedStudentProfileList'
+          description: ''
+    post:
+      operationId: students_create
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentCreate'
+          description: ''
+  /api/v1/students/{id}/:
+    get:
+      operationId: students_retrieve
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this student profile.
+        required: true
+      tags:
+      - students
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+    put:
+      operationId: students_update
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this student profile.
+        required: true
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+    patch:
+      operationId: students_partial_update
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this student profile.
+        required: true
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedStudentProfileRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+    delete:
+      operationId: students_destroy
+      description: |-
+        Students list (+admin CRUD). Backend has all data; students scope
+        their own data — never exposing cross-student info.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this student profile.
+        required: true
+      tags:
+      - students
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/students/import-csv/:
+    post:
+      operationId: students_import_csv_create
+      description: |-
+        Bulk student import from CSV (admin). Validates headers/values,
+        creates account + profile atomically per row, reports row errors.
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+  /api/v1/users/:
+    get:
+      operationId: users_list
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: role
+        schema:
+          type: string
+          title: บทบาทในระบบ
+          enum:
+          - admin
+          - instructor
+          - student
+        description: |-
+          * `admin` - ผู้ดูแลระบบ
+          * `instructor` - อาจารย์ผู้สอน
+          * `student` - นักศึกษา
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserList'
+          description: ''
+    post:
+      operationId: users_create
+      description: Admin-only account management (SAMS spec §3.1).
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreate'
+          description: ''
+  /api/v1/users/{id}/:
+    get:
+      operationId: users_retrieve
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    put:
+      operationId: users_update
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: users_partial_update
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    delete:
+      operationId: users_destroy
+      description: |-
+        Soft-style deletion: deactivate instead of deleting users that
+        already have attendance history (referential integrity, spec §7.3).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/users/{id}/activate/:
+    patch:
+      operationId: users_activate_partial_update
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/users/{id}/suspend/:
+    patch:
+      operationId: users_suspend_partial_update
+      description: Admin-only account management (SAMS spec §3.1).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/users/import-students/:
+    post:
+      operationId: users_import_students_create
+      description: |-
+        Bulk student import from CSV (admin). Validates headers/values,
+        creates account + profile atomically per row, reports row errors.
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+components:
+  schemas:
+    AcademicTerm:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        academic_year:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ปีการศึกษา (พ.ศ.)
+          description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
+        semester:
+          allOf:
+          - $ref: '#/components/schemas/SemesterEnum'
+          title: ภาคการศึกษา
+        semester_display:
+          type: string
+          readOnly: true
+        start_date:
+          type: string
+          format: date
+          title: วันเริ่มต้น
+        end_date:
+          type: string
+          format: date
+          title: วันสิ้นสุด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        is_current:
+          type: boolean
+          title: ภาคปัจจุบัน
+          description: อนุญาตให้มีได้เพียงภาคเดียวต่อการใช้งาน (ผ่าน application-level
+            ตรวจสอบ)
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - academic_year
+      - created_at
+      - end_date
+      - id
+      - semester
+      - semester_display
+      - start_date
+      - updated_at
+    AcademicTermRequest:
+      type: object
+      properties:
+        academic_year:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ปีการศึกษา (พ.ศ.)
+          description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
+        semester:
+          allOf:
+          - $ref: '#/components/schemas/SemesterEnum'
+          title: ภาคการศึกษา
+        start_date:
+          type: string
+          format: date
+          title: วันเริ่มต้น
+        end_date:
+          type: string
+          format: date
+          title: วันสิ้นสุด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        is_current:
+          type: boolean
+          title: ภาคปัจจุบัน
+          description: อนุญาตให้มีได้เพียงภาคเดียวต่อการใช้งาน (ผ่าน application-level
+            ตรวจสอบ)
+      required:
+      - academic_year
+      - end_date
+      - semester
+      - start_date
+    AttendanceRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        attendance_session:
+          type: string
+          format: uuid
+          readOnly: true
+          title: คาบเรียน
+        session_date:
+          type: string
+          format: date
+          readOnly: true
+        course_code:
+          type: string
+          readOnly: true
+        student:
+          type: string
+          format: uuid
+          readOnly: true
+          title: นักศึกษา
+        student_code:
+          type: string
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusC17Enum'
+          title: สถานะ
+        status_display:
+          type: string
+          readOnly: true
+        checked_in_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: เวลาที่เช็คชื่อ
+        check_in_method:
+          allOf:
+          - $ref: '#/components/schemas/CheckInMethodEnum'
+          readOnly: true
+          title: วิธีการเช็คชื่อ
+        method_display:
+          type: string
+          readOnly: true
+        edited_by_username:
+          type: string
+          readOnly: true
+        edit_reason:
+          type: string
+          title: เหตุผลการแก้ไข
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - attendance_session
+      - check_in_method
+      - checked_in_at
+      - course_code
+      - created_at
+      - edited_by_username
+      - id
+      - method_display
+      - session_date
+      - status_display
+      - student
+      - student_code
+      - student_name
+      - updated_at
+    AttendanceRecordUpdate:
+      type: object
+      description: Instructor/admin edit of status with mandatory reason (audited).
+      properties:
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusC17Enum'
+          title: สถานะ
+        edit_reason:
+          type: string
+          title: เหตุผลการแก้ไข
+    AttendanceReportData:
+      type: object
+      properties:
+        data:
+          description: รายงานอัตราการเข้าเรียนตามสูตร spec §11.1
+      required:
+      - data
+    AttendanceSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        term_label:
+          type: string
+          readOnly: true
+        class_schedule:
+          type: string
+          format: uuid
+          nullable: true
+          title: ตารางเรียนที่เชื่อมโยง
+        instructor:
+          type: string
+          format: uuid
+          readOnly: true
+          title: อาจารย์ผู้เปิดคาบ
+        instructor_name:
+          type: string
+          readOnly: true
+        session_date:
+          type: string
+          format: date
+          title: วันที่เรียน
+        check_in_start:
+          type: string
+          format: date-time
+          title: เวลาเริ่มรับเช็คชื่อ
+        check_in_end:
+          type: string
+          format: date-time
+          title: เวลาปิดรับเช็คชื่อ
+        late_threshold_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: เกณฑ์นับมาสาย (นาที)
+        status:
+          allOf:
+          - $ref: '#/components/schemas/AttendanceSessionStatusEnum'
+          readOnly: true
+          title: สถานะ Session
+        status_display:
+          type: string
+          readOnly: true
+        enrolled_count:
+          type: string
+          readOnly: true
+        checked_in_count:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        closed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: เวลาปิดคาบ
+      required:
+      - check_in_end
+      - check_in_start
+      - checked_in_count
+      - closed_at
+      - course_code
+      - course_name
+      - course_offering
+      - created_at
+      - enrolled_count
+      - id
+      - instructor
+      - instructor_name
+      - session_date
+      - status
+      - status_display
+      - term_label
+      - updated_at
+    AttendanceSessionCreate:
+      type: object
+      description: Creating the session object (Scheduled) for an upcoming class.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        class_schedule:
+          type: string
+          format: uuid
+          nullable: true
+          title: ตารางเรียนที่เชื่อมโยง
+        session_date:
+          type: string
+          format: date
+          title: วันที่เรียน
+        check_in_start:
+          type: string
+          format: date-time
+          title: เวลาเริ่มรับเช็คชื่อ
+        check_in_end:
+          type: string
+          format: date-time
+          title: เวลาปิดรับเช็คชื่อ
+        late_threshold_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: เกณฑ์นับมาสาย (นาที)
+      required:
+      - check_in_end
+      - check_in_start
+      - course_offering
+      - id
+      - session_date
+    AttendanceSessionCreateRequest:
+      type: object
+      description: Creating the session object (Scheduled) for an upcoming class.
+      properties:
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        class_schedule:
+          type: string
+          format: uuid
+          nullable: true
+          title: ตารางเรียนที่เชื่อมโยง
+        session_date:
+          type: string
+          format: date
+          title: วันที่เรียน
+        check_in_start:
+          type: string
+          format: date-time
+          title: เวลาเริ่มรับเช็คชื่อ
+        check_in_end:
+          type: string
+          format: date-time
+          title: เวลาปิดรับเช็คชื่อ
+        late_threshold_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: เกณฑ์นับมาสาย (นาที)
+      required:
+      - check_in_end
+      - check_in_start
+      - course_offering
+      - session_date
+    AttendanceSessionRequest:
+      type: object
+      properties:
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        class_schedule:
+          type: string
+          format: uuid
+          nullable: true
+          title: ตารางเรียนที่เชื่อมโยง
+        session_date:
+          type: string
+          format: date
+          title: วันที่เรียน
+        check_in_start:
+          type: string
+          format: date-time
+          title: เวลาเริ่มรับเช็คชื่อ
+        check_in_end:
+          type: string
+          format: date-time
+          title: เวลาปิดรับเช็คชื่อ
+        late_threshold_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: เกณฑ์นับมาสาย (นาที)
+      required:
+      - check_in_end
+      - check_in_start
+      - course_offering
+      - session_date
+    AttendanceSessionStatusEnum:
+      enum:
+      - scheduled
+      - open
+      - paused
+      - closed
+      - cancelled
+      type: string
+      description: |-
+        * `scheduled` - กำหนดการ
+        * `open` - เปิดรับเช็คชื่อ
+        * `paused` - หยุดชั่วคราว
+        * `closed` - ปิดแล้ว
+        * `cancelled` - ยกเลิก
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        actor:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้กระทำ
+        actor_username:
+          type: string
+          readOnly: true
+        action:
+          type: string
+          readOnly: true
+          title: การกระทำ
+        resource_type:
+          type: string
+          readOnly: true
+          title: ประเภททรัพยากร
+        resource_id:
+          type: string
+          readOnly: true
+          title: รหัสทรัพยากร
+        metadata:
+          readOnly: true
+          title: ข้อมูลประกอบ
+        ip_address:
+          type: string
+          readOnly: true
+          nullable: true
+          title: IP ผู้ใช้
+          description: เก็บตามนโยบายความเป็นส่วนตัว (PDPA)
+        user_agent:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - action
+      - actor
+      - actor_username
+      - created_at
+      - id
+      - ip_address
+      - metadata
+      - resource_id
+      - resource_type
+      - user_agent
+    CheckInMethodEnum:
+      enum:
+      - qr
+      - manual
+      type: string
+      description: |-
+        * `qr` - QR Code
+        * `manual` - บันทึกโดยอาจารย์
+    CheckInRequest:
+      type: object
+      description: |-
+        Body for POST /attendance/check-in/ — only the scanned token; nothing
+        else trusted from the client (spec §10.2: session id/status are not taken
+        from client).
+      properties:
+        token:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 256
+      required:
+      - token
+    CheckInResult:
+      type: object
+      properties:
+        attendance_session:
+          type: string
+        course_code:
+          type: string
+        course_name:
+          type: string
+        session_date:
+          type: string
+          format: date
+        status:
+          type: string
+        checked_in_at:
+          type: string
+          format: date-time
+      required:
+      - attendance_session
+      - checked_in_at
+      - course_code
+      - course_name
+      - session_date
+      - status
+    ClassGroup:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        group_code:
+          type: string
+          title: รหัสกลุ่ม
+          maxLength: 32
+        group_name:
+          type: string
+          title: ชื่อกลุ่มเรียน
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          title: หลักสูตร
+        program_name:
+          type: string
+          readOnly: true
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - group_code
+      - group_name
+      - id
+      - program
+      - program_name
+      - updated_at
+    ClassGroupRequest:
+      type: object
+      properties:
+        group_code:
+          type: string
+          minLength: 1
+          title: รหัสกลุ่ม
+          maxLength: 32
+        group_name:
+          type: string
+          minLength: 1
+          title: ชื่อกลุ่มเรียน
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          title: หลักสูตร
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+      required:
+      - group_code
+      - group_name
+      - program
+    ClassSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        term_label:
+          type: string
+          readOnly: true
+        weekday:
+          allOf:
+          - $ref: '#/components/schemas/WeekdayEnum'
+          title: วันเรียนวันที่
+          minimum: 0
+          maximum: 9223372036854775807
+        weekday_display:
+          type: string
+          readOnly: true
+        start_time:
+          type: string
+          format: time
+          title: เวลาเริ่มต้น
+        end_time:
+          type: string
+          format: time
+          title: เวลาสิ้นสุด
+        classroom:
+          type: string
+          title: ห้องเรียน
+          maxLength: 100
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ClassScheduleStatusEnum'
+          title: สถานะตารางเรียน
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - course_code
+      - course_name
+      - course_offering
+      - created_at
+      - end_time
+      - id
+      - start_time
+      - term_label
+      - updated_at
+      - weekday
+      - weekday_display
+    ClassScheduleRequest:
+      type: object
+      properties:
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        weekday:
+          allOf:
+          - $ref: '#/components/schemas/WeekdayEnum'
+          title: วันเรียนวันที่
+          minimum: 0
+          maximum: 9223372036854775807
+        start_time:
+          type: string
+          format: time
+          title: เวลาเริ่มต้น
+        end_time:
+          type: string
+          format: time
+          title: เวลาสิ้นสุด
+        classroom:
+          type: string
+          title: ห้องเรียน
+          maxLength: 100
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ClassScheduleStatusEnum'
+          title: สถานะตารางเรียน
+      required:
+      - course_offering
+      - end_time
+      - start_time
+      - weekday
+    ClassScheduleStatusEnum:
+      enum:
+      - planned
+      - active
+      - cancelled
+      type: string
+      description: |-
+        * `planned` - กำหนดการ
+        * `active` - ใช้งานอยู่
+        * `cancelled` - ยกเลิก
+    Course:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course_code:
+          type: string
+          title: รหัสรายวิชา
+          maxLength: 32
+        course_name:
+          type: string
+          title: ชื่อรายวิชา
+          maxLength: 200
+        credits:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,2}(?:\.\d{0,1})?$
+          title: หน่วยกิต
+        description:
+          type: string
+          title: รายละเอียด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - course_code
+      - course_name
+      - created_at
+      - id
+      - updated_at
+    CourseOffering:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course:
+          type: string
+          format: uuid
+          title: รายวิชา
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        academic_term:
+          type: string
+          format: uuid
+          title: ภาคการศึกษา
+        term_label:
+          type: string
+          readOnly: true
+        instructor:
+          type: string
+          format: uuid
+          nullable: true
+          title: อาจารย์ผู้รับผิดชอบ
+        instructor_name:
+          type: string
+          readOnly: true
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        status:
+          allOf:
+          - $ref: '#/components/schemas/CourseOfferingStatusEnum'
+          title: สถานะ
+        enrollment_count:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - academic_term
+      - course
+      - course_code
+      - course_name
+      - created_at
+      - enrollment_count
+      - id
+      - instructor_name
+      - term_label
+      - updated_at
+    CourseOfferingRequest:
+      type: object
+      properties:
+        course:
+          type: string
+          format: uuid
+          title: รายวิชา
+        academic_term:
+          type: string
+          format: uuid
+          title: ภาคการศึกษา
+        instructor:
+          type: string
+          format: uuid
+          nullable: true
+          title: อาจารย์ผู้รับผิดชอบ
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        status:
+          allOf:
+          - $ref: '#/components/schemas/CourseOfferingStatusEnum'
+          title: สถานะ
+      required:
+      - academic_term
+      - course
+    CourseOfferingStatusEnum:
+      enum:
+      - open
+      - in_progress
+      - completed
+      - cancelled
+      type: string
+      description: |-
+        * `open` - เปิดรับลงทะเบียน
+        * `in_progress` - กำลังเรียน
+        * `completed` - จบภาคเรียนแล้ว
+        * `cancelled` - ยกเลิก
+    CourseRequest:
+      type: object
+      properties:
+        course_code:
+          type: string
+          minLength: 1
+          title: รหัสรายวิชา
+          maxLength: 32
+        course_name:
+          type: string
+          minLength: 1
+          title: ชื่อรายวิชา
+          maxLength: 200
+        credits:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,2}(?:\.\d{0,1})?$
+          title: หน่วยกิต
+        description:
+          type: string
+          title: รายละเอียด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - course_code
+      - course_name
+    DashboardData:
+      type: object
+      properties:
+        data:
+          description: ตัวเลขภาพรวมจากฐานข้อมูลจริง (โครงสร้างตาม spec §7.1)
+      required:
+      - data
+    DegreeLevelEnum:
+      enum:
+      - bachelor
+      - master
+      - doctoral
+      type: string
+      description: |-
+        * `bachelor` - ปริญญาตรี
+        * `master` - ปริญญาโท
+        * `doctoral` - ปริญญาเอก
+    Enrollment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        student:
+          type: string
+          format: uuid
+          title: นักศึกษา
+        student_code:
+          type: string
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        enrollment_status:
+          allOf:
+          - $ref: '#/components/schemas/EnrollmentStatusEnum'
+          title: สถานะการลงทะเบียน
+        enrolled_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - course_code
+      - course_name
+      - course_offering
+      - enrolled_at
+      - id
+      - student
+      - student_code
+      - student_name
+    EnrollmentRequest:
+      type: object
+      properties:
+        student:
+          type: string
+          format: uuid
+          title: นักศึกษา
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        enrollment_status:
+          allOf:
+          - $ref: '#/components/schemas/EnrollmentStatusEnum'
+          title: สถานะการลงทะเบียน
+      required:
+      - course_offering
+      - student
+    EnrollmentStatusEnum:
+      enum:
+      - enrolled
+      - dropped
+      - completed
+      type: string
+      description: |-
+        * `enrolled` - กำลังศึกษา
+        * `dropped` - ถอนรายวิชา
+        * `completed` - จบรายวิชา
+    Health:
+      type: object
+      properties:
+        service:
+          type: string
+        version:
+          type: string
+        database:
+          type: string
+      required:
+      - database
+      - service
+      - version
+    InstructorProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+          title: บัญชีผู้ใช้
+        username:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          readOnly: true
+        employee_code:
+          type: string
+          title: รหัสพนักงาน
+          maxLength: 32
+        first_name:
+          type: string
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          title: นามสกุล
+          maxLength: 100
+        department:
+          type: string
+          title: ภาควิชา/สาขา
+          maxLength: 150
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - employee_code
+      - first_name
+      - id
+      - last_name
+      - updated_at
+      - user
+      - username
+    InstructorProfileRequest:
+      type: object
+      properties:
+        employee_code:
+          type: string
+          minLength: 1
+          title: รหัสพนักงาน
+          maxLength: 32
+        first_name:
+          type: string
+          minLength: 1
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          minLength: 1
+          title: นามสกุล
+          maxLength: 100
+        department:
+          type: string
+          title: ภาควิชา/สาขา
+          maxLength: 150
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+      required:
+      - employee_code
+      - first_name
+      - last_name
+    LogoutRequestRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+    LogoutResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+      - message
+      - success
+    Me:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        role_th:
+          type: string
+          readOnly: true
+        profile:
+          type: string
+          readOnly: true
+      required:
+      - id
+      - profile
+      - role
+      - role_th
+      - username
+    PaginatedAcademicTermList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcademicTerm'
+    PaginatedAttendanceRecordList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttendanceRecord'
+    PaginatedAttendanceSessionList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttendanceSession'
+    PaginatedAuditLogList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+    PaginatedClassGroupList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClassGroup'
+    PaginatedClassScheduleList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClassSchedule'
+    PaginatedCourseList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Course'
+    PaginatedCourseOfferingList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseOffering'
+    PaginatedEnrollmentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Enrollment'
+    PaginatedInstructorProfileList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstructorProfile'
+    PaginatedProgramList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Program'
+    PaginatedStudentProfileList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentProfile'
+    PaginatedUserList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+    PatchedAcademicTermRequest:
+      type: object
+      properties:
+        academic_year:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ปีการศึกษา (พ.ศ.)
+          description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
+        semester:
+          allOf:
+          - $ref: '#/components/schemas/SemesterEnum'
+          title: ภาคการศึกษา
+        start_date:
+          type: string
+          format: date
+          title: วันเริ่มต้น
+        end_date:
+          type: string
+          format: date
+          title: วันสิ้นสุด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        is_current:
+          type: boolean
+          title: ภาคปัจจุบัน
+          description: อนุญาตให้มีได้เพียงภาคเดียวต่อการใช้งาน (ผ่าน application-level
+            ตรวจสอบ)
+    PatchedAttendanceRecordUpdateRequest:
+      type: object
+      description: Instructor/admin edit of status with mandatory reason (audited).
+      properties:
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusC17Enum'
+          title: สถานะ
+        edit_reason:
+          type: string
+          title: เหตุผลการแก้ไข
+    PatchedAttendanceSessionRequest:
+      type: object
+      properties:
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        class_schedule:
+          type: string
+          format: uuid
+          nullable: true
+          title: ตารางเรียนที่เชื่อมโยง
+        session_date:
+          type: string
+          format: date
+          title: วันที่เรียน
+        check_in_start:
+          type: string
+          format: date-time
+          title: เวลาเริ่มรับเช็คชื่อ
+        check_in_end:
+          type: string
+          format: date-time
+          title: เวลาปิดรับเช็คชื่อ
+        late_threshold_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: เกณฑ์นับมาสาย (นาที)
+    PatchedClassGroupRequest:
+      type: object
+      properties:
+        group_code:
+          type: string
+          minLength: 1
+          title: รหัสกลุ่ม
+          maxLength: 32
+        group_name:
+          type: string
+          minLength: 1
+          title: ชื่อกลุ่มเรียน
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          title: หลักสูตร
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+    PatchedClassScheduleRequest:
+      type: object
+      properties:
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        weekday:
+          allOf:
+          - $ref: '#/components/schemas/WeekdayEnum'
+          title: วันเรียนวันที่
+          minimum: 0
+          maximum: 9223372036854775807
+        start_time:
+          type: string
+          format: time
+          title: เวลาเริ่มต้น
+        end_time:
+          type: string
+          format: time
+          title: เวลาสิ้นสุด
+        classroom:
+          type: string
+          title: ห้องเรียน
+          maxLength: 100
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ClassScheduleStatusEnum'
+          title: สถานะตารางเรียน
+    PatchedCourseOfferingRequest:
+      type: object
+      properties:
+        course:
+          type: string
+          format: uuid
+          title: รายวิชา
+        academic_term:
+          type: string
+          format: uuid
+          title: ภาคการศึกษา
+        instructor:
+          type: string
+          format: uuid
+          nullable: true
+          title: อาจารย์ผู้รับผิดชอบ
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        status:
+          allOf:
+          - $ref: '#/components/schemas/CourseOfferingStatusEnum'
+          title: สถานะ
+    PatchedCourseRequest:
+      type: object
+      properties:
+        course_code:
+          type: string
+          minLength: 1
+          title: รหัสรายวิชา
+          maxLength: 32
+        course_name:
+          type: string
+          minLength: 1
+          title: ชื่อรายวิชา
+          maxLength: 200
+        credits:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,2}(?:\.\d{0,1})?$
+          title: หน่วยกิต
+        description:
+          type: string
+          title: รายละเอียด
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+    PatchedEnrollmentRequest:
+      type: object
+      properties:
+        student:
+          type: string
+          format: uuid
+          title: นักศึกษา
+        course_offering:
+          type: string
+          format: uuid
+          title: รายวิชาที่เปิดสอน
+        enrollment_status:
+          allOf:
+          - $ref: '#/components/schemas/EnrollmentStatusEnum'
+          title: สถานะการลงทะเบียน
+    PatchedInstructorProfileRequest:
+      type: object
+      properties:
+        employee_code:
+          type: string
+          minLength: 1
+          title: รหัสพนักงาน
+          maxLength: 32
+        first_name:
+          type: string
+          minLength: 1
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          minLength: 1
+          title: นามสกุล
+          maxLength: 100
+        department:
+          type: string
+          title: ภาควิชา/สาขา
+          maxLength: 150
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+    PatchedProgramRequest:
+      type: object
+      properties:
+        program_code:
+          type: string
+          minLength: 1
+          title: รหัสหลักสูตร
+          maxLength: 32
+        program_name:
+          type: string
+          minLength: 1
+          title: ชื่อหลักสูตร
+          maxLength: 200
+        degree_level:
+          allOf:
+          - $ref: '#/components/schemas/DegreeLevelEnum'
+          title: ระดับการศึกษา
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+    PatchedStudentProfileRequest:
+      type: object
+      properties:
+        student_code:
+          type: string
+          minLength: 1
+          title: รหัสนักศึกษา
+          maxLength: 32
+        first_name:
+          type: string
+          minLength: 1
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          minLength: 1
+          title: นามสกุล
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+    PatchedUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+    Program:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        program_code:
+          type: string
+          title: รหัสหลักสูตร
+          maxLength: 32
+        program_name:
+          type: string
+          title: ชื่อหลักสูตร
+          maxLength: 200
+        degree_level:
+          allOf:
+          - $ref: '#/components/schemas/DegreeLevelEnum'
+          title: ระดับการศึกษา
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - program_code
+      - program_name
+      - updated_at
+    ProgramRequest:
+      type: object
+      properties:
+        program_code:
+          type: string
+          minLength: 1
+          title: รหัสหลักสูตร
+          maxLength: 32
+        program_name:
+          type: string
+          minLength: 1
+          title: ชื่อหลักสูตร
+          maxLength: 200
+        degree_level:
+          allOf:
+          - $ref: '#/components/schemas/DegreeLevelEnum'
+          title: ระดับการศึกษา
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - program_code
+      - program_name
+    RefreshRequestRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+    RefreshResponse:
+      type: object
+      properties:
+        access:
+          type: string
+      required:
+      - access
+    RoleEnum:
+      enum:
+      - admin
+      - instructor
+      - student
+      type: string
+      description: |-
+        * `admin` - ผู้ดูแลระบบ
+        * `instructor` - อาจารย์ผู้สอน
+        * `student` - นักศึกษา
+    SAMSLoginRequest:
+      type: object
+      description: Login that also carries SAMS role/profile claims for the front-end.
+      properties:
+        username:
+          type: string
+          writeOnly: true
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - password
+      - username
+    SemesterEnum:
+      enum:
+      - '1'
+      - '2'
+      - '3'
+      type: string
+      description: |-
+        * `1` - ภาคเรียนที่ 1
+        * `2` - ภาคเรียนที่ 2
+        * `3` - ภาคเรียนฤดูร้อน
+    StatusC17Enum:
+      enum:
+      - present
+      - late
+      - absent
+      - excused
+      type: string
+      description: |-
+        * `present` - เข้าเรียน
+        * `late` - มาสาย
+        * `absent` - ขาดเรียน
+        * `excused` - ลา/ได้รับอนุญาต
+    StatusF4fEnum:
+      enum:
+      - active
+      - suspended
+      - inactive
+      type: string
+      description: |-
+        * `active` - ใช้งานอยู่
+        * `suspended` - ระงับการใช้งาน
+        * `inactive` - ไม่ใช้งาน
+    StudentCreate:
+      type: object
+      description: Admin creates user account + student profile in one request.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          maxLength: 150
+        email:
+          oneOf:
+          - type: string
+            format: email
+            default: ''
+          - type: string
+            maxLength: 0
+        student_code:
+          type: string
+          maxLength: 32
+        first_name:
+          type: string
+          maxLength: 100
+        last_name:
+          type: string
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          nullable: true
+        academic_year_level:
+          type: integer
+          maximum: 8
+          minimum: 1
+          default: 1
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+      required:
+      - first_name
+      - id
+      - last_name
+      - student_code
+      - username
+    StudentCreateRequest:
+      type: object
+      description: Admin creates user account + student profile in one request.
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 150
+        email:
+          oneOf:
+          - type: string
+            format: email
+            default: ''
+          - type: string
+            maxLength: 0
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        student_code:
+          type: string
+          minLength: 1
+          maxLength: 32
+        first_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        last_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          nullable: true
+        academic_year_level:
+          type: integer
+          maximum: 8
+          minimum: 1
+          default: 1
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+      required:
+      - first_name
+      - last_name
+      - password
+      - student_code
+      - username
+    StudentProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+          title: บัญชีผู้ใช้
+        username:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          readOnly: true
+        account_active:
+          type: boolean
+          readOnly: true
+        student_code:
+          type: string
+          title: รหัสนักศึกษา
+          maxLength: 32
+        first_name:
+          type: string
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          title: นามสกุล
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        program_name:
+          type: string
+          readOnly: true
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        class_group_name:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_active
+      - class_group_name
+      - created_at
+      - email
+      - first_name
+      - id
+      - last_name
+      - program_name
+      - student_code
+      - updated_at
+      - user
+      - username
+    StudentProfileRequest:
+      type: object
+      properties:
+        student_code:
+          type: string
+          minLength: 1
+          title: รหัสนักศึกษา
+          maxLength: 32
+        first_name:
+          type: string
+          minLength: 1
+          title: ชื่อ
+          maxLength: 100
+        last_name:
+          type: string
+          minLength: 1
+          title: นามสกุล
+          maxLength: 100
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        academic_year_level:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          title: ชั้นปี
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusF4fEnum'
+          title: สถานะ
+      required:
+      - first_name
+      - last_name
+      - student_code
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+          title: วันที่เข้าร่วม
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: สร้างเมื่อ
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          title: แก้ไขล่าสุด
+        student_code:
+          type: string
+          readOnly: true
+      required:
+      - created_at
+      - date_joined
+      - id
+      - role
+      - student_code
+      - updated_at
+      - username
+    UserCreate:
+      type: object
+      description: |-
+        Admin-only user creation honouring mass-assignment protection:
+        role must be explicit; password is validated, hashed, never echoed.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - id
+      - role
+      - username
+    UserCreateRequest:
+      type: object
+      description: |-
+        Admin-only user creation honouring mass-assignment protection:
+        role must be explicit; password is validated, hashed, never echoed.
+      properties:
+        username:
+          type: string
+          minLength: 1
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        confirm_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - password
+      - role
+      - username
+    UserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          title: ชื่อผู้ใช้
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          title: อีเมล
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          title: บทบาทในระบบ
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - role
+      - username
+    WeekdayEnum:
+      enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      type: integer
+      description: |-
+        * `0` - จันทร์
+        * `1` - อังคาร
+        * `2` - พุธ
+        * `3` - พฤหัสบดี
+        * `4` - ศุกร์
+        * `5` - เสาร์
+        * `6` - อาทิตย์
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
