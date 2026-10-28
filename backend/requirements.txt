@@ -6,3 +6,7 @@ drf-spectacular==0.30.0
 django-filter==26.2
 django-cors-headers==4.9.0
 psycopg[binary]==3.3.6
+
+# Production web server + static file serving (Coolify/Docker deploy)
+gunicorn==23.0.0
+whitenoise==6.9.0

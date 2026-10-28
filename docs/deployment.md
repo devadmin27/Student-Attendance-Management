@@ -76,3 +76,46 @@ npm start           # port 3000 — ให้ reverse proxy ชี้โดเ�
 ```
 
 > **ห้ามรัน `npm run build` ตอน `next dev` กำลังทำงาน** — พอร์ต/โฟลเดอร์ `.next` ชนกัน ทำให้ HMR พัง (พบจริงระหว่าง dev)
+
+## 8. Deploy บน Coolify (Docker)
+
+การเตรียมไฟล์ที่เกี่ยวข้อง (ทดสอบจริงในส่วนที่เครื่องพัฒนาทำได้ — ดูรายการท้ายหัวข้อ):
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `backend/requirements.txt` | เพิ่ม `gunicorn` (Web server ผลิต) + `whitenoise` (เสิร์ฟ static เมื่อ DEBUG=False) |
+| `backend/config/settings.py` | เพิ่ม `whitenoise.middleware.WhiteNoiseMiddleware` หลัง SecurityMiddleware + `CompressedManifestStaticFilesStorage` เมื่อ DEBUG=False |
+| `Dockerfile` (root ของโปรเจกต์) | อิมเมจผลิต Django backend — ตั้ง Build Context = repo root |
+
+### ค่าที่ตั้งบน Coolify
+
+- **Type:** Dockerfile, Dockerfile path: `/Dockerfile` (root), Build Context: `/`
+- **Port:** `8000` (หรือกำหนด var `PORT` — สคริปต์ CMD อ่าน `${PORT:-8000}`)
+- **Environment variables ที่ต้องใส่ (ไม่มีค่า default ที่เป็นจริงได้):**
+
+| ตัวแปร | ค่า |
+|---|---|
+| `DJANGO_SECRET_KEY` | ค่าสุ่มยาว เฉพาะระบบ | 
+| `DB_ENGINE` | `postgresql` (default อยู่แล้ว) |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` | ครบชุดจาก Supabase (หรือ Postgres ภายใน Coolify) |
+| `DB_PORT` | `5432` (default) |
+| `DB_SSLMODE` | `require` สำหรับ Supabase โดยตรง; `disable` ถ้าผ่าน pooler/ตัวกรองที่ปฏิเสธ SSL (ทดสอบจริง: พอร์ต 5432 ของขบวนนี้ตอบ `N` ให้ SSL) |
+| `DJANGO_ALLOWED_HOSTS` | โดเมนจริงที่ Coolify ผูกไว้ |
+| `DJANGO_CORS_ALLOWED_ORIGINS` | URL จริงของ frontend เช่น `https://sams.example.ac.th` |
+
+### สิ่งที่อิมเมจทำเองตอน deploy
+
+1. `collectstatic` (ตอน build — ต้องใช้ dummy vars ภายใน Dockerfile แล้ว; **ไม่ต้องให้ค่าจริงตอน build**)
+2. `migrate --noinput` ทุกครั้งที่สตาร์ท container
+3. รัน `gunicorn config.wsgi:application` (3 workers, timeout 60s) — **ช่วย migrate ไม่ได้ถ้า DB ยังไม่พร้อม** ถ้า migrate พลาด container จะตาย → Coolify ต้องแสดง log จาก container ตัวนี้
+
+### ข้อจำกัดที่ยืนยันทางทดสอบ
+
+- ✅ `manage.py check` ผ่านด้วยอาวุธ whitenoise/gunicorn ติดตั้งแล้ว
+- ✅ `collectstatic` รันด้วย env หน่วงตอน build สำเร็จ (157 files, 453 หลัง hashing เพิ่ม)
+- ⚠️ **`gunicorn` รันบน Windows ไม่ได้** (ต้อง Linux) — ทดสอบ `docker build` บนเครื่องพัฒนาไม่ได้ (Docker Desktop ปิด) — ว่ากันไปตามเกณฑ์ "ห้ามประกาศพฤติกรรมที่ไม่ได้ทดสอบ": ผลจริงบน Coolify คือยังไม่ได้ยืนยันเช่นชนิดจนเครื่องมี daemon
+
+### WhiteNoise กับ static
+
+`CompressedManifestStaticFilesStorage` ให้บรอว์เซอร์ cache ตาม fingerprint hash — ต้องเรียก `{% static %}` ผ่าน template (Django admin ใช้แบบนี้อยู่แล้ว) และ manifest file (`staticfiles.json`) ถูก bake ลงอิมเมจแล้วเพราะ collectstatic รันด้วย `DEBUG=False` ตอน build
+
