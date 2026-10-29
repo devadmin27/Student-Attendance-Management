@@ -180,3 +180,8 @@ Backend env เมื่อ frontend ต่างโดเมน:
 
 - ✅ nginx config เขียนตามต้นฉบับกฎ routing จาก compose, อิมเมจ backend/frontend reuse จาก Dockerfile เดิมที่ทดสอบ build ผ่านท้องถิ่น
 - ⚠️ `docker compose -f docker-compose.production.yml up` ในเครื่องยังไม่ได้รัน (Docker Desktop ปิด) — ผลจริงบน Coolify ต้องติดตามที่ log แล้วกลับมารายงาน ป. ตามที่บันทึกไว้ตามข้อ 8
+### รายการปรับปรุงหลัง deploy จริง (2026-10-29)
+
+- **ย้าย Django admin จาก `/admin/` ไป `/django-admin/`** (`backend/config/urls.py`) — เหตุผล: Next.js ใช้ prefix `/admin/*` สำหรับหน้าจัดการฝั่งบริการ (`/admin/dashboard`, `/admin/users`, …) กับ admin ของ Django ชนกันเมื่อ route ตาม prefix — ลูกเรียก `/admin/dashboard` โดนส่งเข้า Django แล้วเด้ง `/admin/login/` จนเข้าหน้าบริการไม่ได้ — ยืนยันจาก URL จริง + แก้ nginx.conf routing เป็น `(api|django-admin|static)` ให้ตรง (ทดสอบ Django test 50/50 ผ่านหลังแก้)
+- ผู้ดูแลเข้า Django admin ที่ `/django-admin/` (สิทธิ์ admin user เดิมทั้งหมดเหมือนเดิม; มีพฤติกรรมเดิมทุกจุด)
+
