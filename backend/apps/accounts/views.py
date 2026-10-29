@@ -3,7 +3,7 @@ import csv
 import io
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -231,17 +231,27 @@ class InstructorProfileViewSet(viewsets.ModelViewSet):
                 {"success": False, "message": "รหัสผ่านไม่ผ่านเกณฑ์: " + str(exc), "code": "PASSWORD_WEAK"},
                 status=400,
             )
-        user = User.objects.create_user(
-            username=to_create["username"], email=to_create["email"],
-            password=to_create["password"], role="instructor",
-        )
-        instance = InstructorProfile.objects.create(
-            user=user,
-            employee_code=to_create["employee_code"],
-            first_name=to_create["first_name"],
-            last_name=to_create["last_name"],
-            department=to_create["department"],
-        )
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=to_create["username"], email=to_create["email"],
+                    password=to_create["password"], role="instructor",
+                )
+                # create_user already inserted the InstructorProfile via
+                # UserManager._ensure_profile (employee_code=auto-...) — update
+                # that row instead of inserting a second one for the same
+                # OneToOne user_id (UniqueViolation on Postgres → 500).
+                instance = InstructorProfile.objects.get(user=user)
+                instance.employee_code = to_create["employee_code"]
+                instance.first_name = to_create["first_name"]
+                instance.last_name = to_create["last_name"]
+                instance.department = to_create["department"]
+                instance.save()
+        except IntegrityError:
+            return Response(
+                {"success": False, "message": "มีบัญชีหรือรหัสพนักงานนี้อยู่แล้ว", "code": "DUPLICATE"},
+                status=400,
+            )
         log_audit(request.user, "instructor_create", "instructor_profile", instance.pk, request=request)
         return success_response(
             InstructorProfileSerializer(instance).data, "เพิ่มอาจารย์สำเร็จ", 201
