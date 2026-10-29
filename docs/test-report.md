@@ -90,3 +90,31 @@
 
 - Server Postgres ที่ใช้จริง **ไม่รองรับ SSL** บนพอร์ต 5432 → `DB_SSLMODE=disable` (บันทึกใน [`security-review.md`](security-review.md) พร้อม mitigation)
 - ผลิต seed เฉพาะ `admin` — ควรเปลี่ยนรหัสผ่านหลังใช้จริง
+
+## 8. Production deploy จริงบน Coolify (2026-10-29)
+
+สถาปัตยกรรมที่ deploy: Coolify **Docker Compose resource เดียว** (proxy → backend/frontend), โดเมนร่วม `https://sams.scphtrang.ac.th` ผ่าน Coolify Traefik (commit `392d712` → `76a4541` → `b67af63`)
+
+### ตรวจ URL production จริง (ผ่าน HTTP ทุกตัว)
+
+| URL | ผล | ยืนยัน |
+|---|---|---|
+| `/` | ✅ 200 | Next.js ไทย (`lang="th"`, title "SAMS") |
+| `/login` | ✅ 200 | หน้า login frontend |
+| `/admin/dashboard` | ✅ 200 | **Frontend จริง** (`/_next` assets) — ไม่ใช่ Django admin |
+| `/api/v1/health/` | ✅ 200 | `database: "connected"` |
+| `/django-admin/login/` | ✅ 200 | หน้า login Django admin (ภาษาไทย) |
+| `/api/v1/schema/` + `/api/v1/docs/` | ✅ 200 ทั้งคู่ | OpenAPI JSON (135 KB) + Swagger UI |
+
+### Bug ที่พบจาก production จริงและแก้แล้ว
+
+| # | อาการ | สาเหตุ (ยืนยัน traceback จริง) | แก้ไข | หลักฐานหลังแก้ (production จริง) |
+|---|---|---|---|---|
+| 9 | login frontend ด้วย admin แล้วถูก redirect ไป `/admin/login` (Django admin) เข้า `/admin/dashboard` ไม่ได้ | nginx route เดิม `^/(api|admin|static)/` → Django; คู่กับ `urls.py` `path("admin/")` — **prefix `/admin/` ชนกันระหว่าง Django admin กับหน้า dashboard ของ Next.js** (`filterHome(admin) = "/admin/dashboard"`) | ย้าย Django admin ไป `path("django-admin/", ...)` (`backend/config/urls.py`, รอบ `ccab5d3`) และ nginx route เป็น `^/(api|django-admin|static)/` | probe จริง: `/admin/dashboard` → 200 หน้า Next.js; `/django-admin/login/` → 200 |
+| 10 | เพิ่มอาจารย์หน้า `/instructors` → 500 "เกิดข้อผิดพลาดในการเชื่อมต่อระบบ" | `UserManager.create_user(role="instructor")` สร้าง InstructorProfile แล้วแถวเดียว (`_ensure_profile`); view ไป `InstructorProfile.objects.create(user=user, ...)` **ซ้ำ** → `UniqueViolation: instructor_profiles_user_id_key` (Postgres); และไม่มี transaction — เมื่อพังกลางคัน user กลางคันถูก commit ค้างใน DB | `get(user=user)` + update field ภายใน `transaction.atomic()` + จับ `IntegrityError` → **400 "มีบัญชีหรือรหัสพนักงานนี้อยู่แล้ว"** (`ec36505`) | probe จริง: POST 201 "เพิ่มอาจารย์สำเร็จ"; POST ซ้ำ → 400 DUPLICATE; user กลางคันที่ค้างถูกลบ (204) — DB กลับสู่ state เดิม |
+| 11 | เพิ่มนักศึกษาหน้า `/students` → 500 (แบบเดียวกับ #10) | `StudentCreateSerializer.create` รัน `User.objects.create_user(role="student")` (สร้าง StudentProfile auto) แล้ว `StudentProfile.objects.create(user=with_user, **validated)` **ซ้ำ** → ชน unique OneToOne บน Postgres; CSV import ไม่เกี่ยว (ใช้ `user.student_profile` ที่มีอยู่แล้ว) | แก้ serializer: `get(user=with_user)` + อัปเดต field ที่ validate แล้วทั้งหมด ภายใน `transaction.atomic()` + `IntegrityError` → ValidationError 400 (`b8a53b8`) | ยืนยัน flow ใหม่บน Postgres จริง (rollback sim): student_code ถูกตั้งจาก payload + Django test 50/50 ผ่าน |
+
+### ข้อสังเกตการทดสอบ
+
+- ทดสอบ bug #10/#11 ทำโดย probe API จริงด้วย **transaction rollback** บน Postgres ผลิต — ไม่ทิ้งข้อมูลค้าง; ทุกครั้งที่เกิด user กลางคันมี DELETE account (204) เก็บกวาดให้เสมอ
+- Probe จากภายนอก: Python urllib ธรรมดา UA `sams-probe/1.0` — ผ่าน Cloudflare (opener ที่มี cookie เก่าอาจตอบ 403 ลวง ผิดกับ UA/headers ธรรมดา)
