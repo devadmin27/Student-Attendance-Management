@@ -3,6 +3,7 @@ import uuid
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -170,11 +171,22 @@ class StudentCreateSerializer(serializers.ModelSerializer):
         password = validated.pop("password")
         username = validated.pop("username")
         email = validated.pop("email", "")
-        with_user = User.objects.create_user(
-            username=username, email=email, password=password, role="student"
-        )
-        student = StudentProfile.objects.create(user=with_user, **validated)
-        return student
+        try:
+            with transaction.atomic():
+                with_user = User.objects.create_user(
+                    username=username, email=email, password=password, role="student"
+                )
+                # create_user already inserted the StudentProfile via
+                # UserManager._ensure_profile (student_code=auto-...) — update
+                # that row instead of inserting a second one for the same
+                # OneToOne user_id (UniqueViolation on Postgres → 500).
+                student = StudentProfile.objects.get(user=with_user)
+                for field, value in validated.items():
+                    setattr(student, field, value)
+                student.save()
+                return student
+        except IntegrityError as exc:
+            raise serializers.ValidationError("มีบัญชีหรือรหัสนักศึกษานี้อยู่แล้ว") from exc
 
 
 # ---------------------------------------------------------------------------
