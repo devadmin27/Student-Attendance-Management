@@ -74,13 +74,21 @@ class AttendanceSessionCreateSerializer(serializers.ModelSerializer):
     def create(self, validated):
         # Instructor comes from the authenticated user, never client input.
         offering = validated["course_offering"]
-        if offering.instructor is None:
+        user = self.context["request"].user
+        if offering.instructor is None and user.role != "instructor":
             raise serializers.ValidationError(
                 {"course_offering": "รายวิชานี้ยังไม่มีอาจารย์ผู้รับผิดชอบ"}
             )
-        user = self.context["request"].user
         if user.role == "instructor":
-            validated["instructor"] = user.instructor_profile
+            # getattr with default: reverse OneToOne without a profile row
+            # raises RelatedObjectDoesNotExist on direct access — map it to a
+            # clear 400 instead of an unhandled 500.
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None:
+                raise serializers.ValidationError(
+                    {"detail": "บัญชีนี้ยังไม่มีโปรไฟล์อาจารย์ — ให้ผู้ดูแลเพิ่มข้อมูลในหน้า Instructors ก่อน"}
+                )
+            validated["instructor"] = profile
         else:
             validated["instructor"] = offering.instructor
         return super().create(validated)

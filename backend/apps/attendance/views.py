@@ -38,9 +38,14 @@ class SessionScopeMixin:
 
     def scoped(self, queryset, action_scope="view"):
         user = self.request.user
-        if user.role == "instructor" and getattr(user, "instructor_profile", None):
-            qs = queryset.filter(course_offering__instructor=user.instructor_profile).distinct()
-            return qs
+        if user.role == "instructor":
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None:
+                # Fail closed: a profile-less instructor account sees nothing
+                # (previously fell through to the unscoped queryset and
+                # exposed every session).
+                return queryset.none()
+            return queryset.filter(course_offering__instructor=profile).distinct()
         return queryset
 
     def can_manage(self, session: AttendanceSession) -> bool:
@@ -217,9 +222,12 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             "attendance_session__course_offering__course", "edited_by",
         )
         user = self.request.user
-        if user.role == "instructor" and getattr(user, "instructor_profile", None):
+        if user.role == "instructor":
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None:
+                return qs.none()
             return qs.filter(
-                attendance_session__course_offering__instructor=user.instructor_profile
+                attendance_session__course_offering__instructor=profile
             )
         return qs
 
