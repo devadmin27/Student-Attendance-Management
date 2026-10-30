@@ -93,7 +93,13 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
         offering = serializer.validated_data["course_offering"]
         user = request.user
         if user.role == "instructor":
-            if offering.instructor_id != user.instructor_profile.id:
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None:
+                return error_response(
+                    "บัญชีนี้ยังไม่มีโปรไฟล์อาจารย์ — ให้ผู้ดูแลเพิ่มข้อมูลในหน้า Instructors ก่อน",
+                    "NO_INSTRUCTOR_PROFILE", 400
+                )
+            if offering.instructor_id != profile.id:
                 return error_response(
                     "คุณไม่ได้เป็นอาจารย์ผู้รับผิดชอบรายวิชานี้", "PERMISSION_DENIED", 403
                 )
