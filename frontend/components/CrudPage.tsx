@@ -20,7 +20,9 @@ export type FieldType =
   | "time"
   | "datetime-local"
   | "checkbox"
-  | "select";
+  | "select"
+  | "select-search" // FK picker with free-text filter (ค้นหาด้วยรหัสวิชา)
+  | "multiselect"; // many FKs (อาจารย์ผู้รับผิดชอบหลายคน)
 
 export interface FieldDef {
   name: string;
@@ -65,6 +67,7 @@ export default function CrudPage<T extends { id: string }>({
   canDelete = true,
   emptyMessage = "ยังไม่มีข้อมูล",
   transformRow,
+  headerExtra,
 }: {
   title: string;
   basePath: string;
@@ -73,6 +76,7 @@ export default function CrudPage<T extends { id: string }>({
   searchPlaceholder?: string;
   filters?: FilterDef[];
   rowActions?: (row: T, refresh: () => void) => React.ReactNode; // custom (non-crud) actions
+  headerExtra?: (refresh: () => void) => React.ReactNode; // extra toolbar action (gets refresh)
   createTitle?: string;
   /** Map the modal form into a create payload (e.g. split into nested objects). */
   createValue?: (values: Record<string, unknown>) => Record<string, unknown>;
@@ -137,7 +141,7 @@ export default function CrudPage<T extends { id: string }>({
   const optionsSig = useMemo(() => {
     const keys = new Set<string>();
     for (const f of listFields) {
-      if (f.type === "select" && f.optionsKey && !f.options) keys.add(f.optionsKey);
+      if (f.optionsKey && !f.options && f.type !== "text") keys.add(f.optionsKey);
     }
     for (const f of filters) {
       if (f.optionsKey && !f.options) keys.add(f.optionsKey);
@@ -148,7 +152,7 @@ export default function CrudPage<T extends { id: string }>({
     let cancelled = false;
     const load = async () => {
       const modalKeys = listFields
-        .filter((f) => f.type === "select" && f.optionsKey && !f.options)
+        .filter((f) => f.optionsKey && !f.options && f.type !== "text")
         .map((f) => f.optionsKey as OptionsKey);
       const filterKeys = filters
         .filter((f) => f.optionsKey && !f.options)
@@ -177,7 +181,14 @@ export default function CrudPage<T extends { id: string }>({
 
   const openCreate = () => {
     const initial: Record<string, unknown> = {};
-    for (const f of listFields) initial[f.name] = f.defaultValue ?? (f.type === "checkbox" ? true : "");
+    for (const f of listFields) {
+      initial[f.name] =
+        f.type === "multiselect"
+          ? Array.isArray(f.defaultValue)
+            ? f.defaultValue
+            : []
+          : f.defaultValue ?? (f.type === "checkbox" ? true : "");
+    }
     setForm(initial);
     setEditing(null);
     setModalOpen(true);
@@ -187,11 +198,25 @@ export default function CrudPage<T extends { id: string }>({
     const initial: Record<string, unknown> = {};
     for (const f of listFields) {
       if (f.createOnly) {
-        initial[f.name] = f.defaultValue ?? (f.type === "checkbox" ? true : "");
+        initial[f.name] =
+          f.type === "multiselect" ? [] : f.defaultValue ?? (f.type === "checkbox" ? true : "");
         continue;
       }
       const raw = (row as unknown as Record<string, unknown>)[f.name] ?? "";
-      initial[f.name] = f.type === "checkbox" ? Boolean(raw) : String(raw ?? "");
+      if (f.type === "multiselect") {
+        initial[f.name] = Array.isArray(raw)
+          ? raw.map((x: unknown) =>
+              x && typeof x === "object" ? String((x as { id?: unknown }).id) : String(x),
+            )
+          : [];
+      } else if (f.type === "select-search") {
+        const id = String(raw ?? "");
+        const opt = optionsFor(f).find((o) => o.value === id);
+        initial[f.name] = id;
+        initial[`${f.name}__text`] = opt ? opt.label : id;
+      } else {
+        initial[f.name] = f.type === "checkbox" ? Boolean(raw) : String(raw ?? "");
+      }
     }
     setForm(initial);
     setEditing(row);
@@ -201,6 +226,8 @@ export default function CrudPage<T extends { id: string }>({
   /** Serialize one form value to its API representation. */
   const serializeValue = (f: FieldDef, raw: unknown): unknown => {
     if (f.type === "checkbox") return Boolean(raw);
+    if (f.type === "multiselect")
+      return Array.isArray(raw) ? raw.map((x) => String(x)) : [];
     const text = String(raw ?? "").trim();
     if (text === "") return null;
     if (f.type === "number") return Number(text);
@@ -238,6 +265,15 @@ export default function CrudPage<T extends { id: string }>({
     try {
       const mode = editing ? "update" : "create";
       let payload = buildPayload(mode);
+      // select-search stores the picked id in a hidden input the browser
+      // skips during native validation — enforce required here instead.
+      for (const f of listFields) {
+        if (f.type === "select-search" && f.required && !payload[f.name]) {
+          setSaving(false); // re-raise as form UI error
+          await alertError(`กรุณาเลือก${f.label}`);
+          return;
+        }
+      }
       if (mode === "create" && createValue) payload = createValue(payload);
       if (mode === "update" && updateValue) payload = updateValue(payload);
       await samsRequest({
@@ -310,6 +346,7 @@ export default function CrudPage<T extends { id: string }>({
         >
           ＋ {createTitle}
         </button>
+        {headerExtra?.(refresh)}
       </div>
 
       {filters.length > 0 && (
@@ -395,6 +432,102 @@ export default function CrudPage<T extends { id: string }>({
                 .filter((f) => !f.createOnly || !editing)
                 .map((f) => {
                   const options = optionsFor(f);
+                  if (f.type === "select-search") {
+                    const text = String(form[`${f.name}__text`] ?? "");
+                    const needle = text.trim().toLowerCase();
+                    const filtered = needle
+                      ? options.filter(
+                          (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
+                        )
+                      : options;
+                    return (
+                      <div key={f.name} className="flex flex-col gap-1">
+                        <label htmlFor={`field-${f.name}`} className="text-sm font-medium text-slate-700">
+                          {f.label}
+                          {f.required && <span className="text-red-500"> *</span>}
+                        </label>
+                        <input
+                          id={`field-${f.name}`}
+                          type="hidden"
+                          name={f.name}
+                          required={f.required}
+                          value={String(form[f.name] ?? "")}
+                          readOnly
+                        />
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={f.placeholder ?? "พิมพ์เพื่อค้นหา…"}
+                          value={text}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, [f.name]: "", [`${f.name}__text`]: e.target.value }))
+                          }
+                          onFocus={(e) => {
+                            e.currentTarget.select();
+                          }}
+                          className={inputClass}
+                        />
+                        <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                          {filtered.length === 0 && (
+                            <div className="px-3 py-2 text-sm text-slate-400">ไม่พบรายการที่ค้นหา</div>
+                          )}
+                          {filtered.map((o) => (
+                            <button
+                              key={o.value}
+                              type="button"
+                              onClick={() =>
+                                setForm((p) => ({ ...p, [f.name]: o.value, [`${f.name}__text`]: o.label }))
+                              }
+                              className={`block w-full px-3 py-2 text-left text-sm hover:bg-blue-50 ${
+                                form[f.name] === o.value ? "bg-blue-50 font-medium text-blue-800" : ""
+                              }`}
+                            >
+                              {o.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (f.type === "multiselect") {
+                    const selected = Array.isArray(form[f.name]) ? (form[f.name] as string[]) : [];
+                    return (
+                      <div key={f.name} className="flex flex-col gap-1">
+                        <label htmlFor={`field-${f.name}`} className="text-sm font-medium text-slate-700">
+                          {f.label}
+                          {f.required && <span className="text-red-500"> *</span>}
+                        </label>
+                        <div
+                          id={`field-${f.name}`}
+                          className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2"
+                        >
+                          {options.length === 0 && (
+                            <div className="px-1 py-1 text-sm text-slate-400">ไม่มีตัวเลือก</div>
+                          )}
+                          {options.map((o) => (
+                            <label
+                              key={o.value}
+                              className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-blue-50"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected.includes(o.value)}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...selected, o.value]
+                                    : selected.filter((v) => v !== o.value);
+                                  setForm((p) => ({ ...p, [f.name]: next }));
+                                }}
+                                className="h-4 w-4 rounded border-slate-300"
+                              />
+                              {o.label}
+                            </label>
+                          ))}
+                        </div>
+                        {f.hint && <span className="text-xs text-slate-400">{f.hint}</span>}
+                      </div>
+                    );
+                  }
                   return (
                     <div key={f.name} className="flex flex-col gap-1">
                       <label htmlFor={`field-${f.name}`} className="text-sm font-medium text-slate-700">

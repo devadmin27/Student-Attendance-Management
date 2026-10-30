@@ -94,6 +94,10 @@ export interface CourseOffering {
   term_label: string;
   instructor: string | null;
   instructor_name: string | null;
+  /** รายการ pk ของอาจารย์ผู้รับผิดชอบทั้งหมด (เลือกได้หลายคน) */
+  instructors: string[];
+  instructor_ids?: string[];
+  instructor_names?: string[];
   class_group: string | null;
   status: "open" | "in_progress" | "completed" | "cancelled";
   enrollment_count: number;

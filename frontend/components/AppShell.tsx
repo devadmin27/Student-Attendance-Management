@@ -30,8 +30,11 @@ const ADMIN_MENU: MenuItem[] = [
 const INSTRUCTOR_MENU: MenuItem[] = [
   { href: "/instructor/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/instructor/attendance", label: "เปิดเช็คชื่อ", icon: "🟢" },
+  { href: "/instructor/course-offerings", label: "จัดการเปิดสอนรายวิชา", icon: "📚" },
+  { href: "/instructor/enrollments", label: "จัดการการลงทะเบียน", icon: "🗒️" },
+  { href: "/instructor/schedules", label: "จัดการตารางเรียน", icon: "⏰" },
   { href: "/instructor/courses", label: "รายวิชาของฉัน", icon: "📘" },
-  { href: "/instructor/schedule", label: "ตารางสอน", icon: "⏰" },
+  { href: "/instructor/schedule", label: "ตารางสอน", icon: "🗓️" },
   { href: "/instructor/reports", label: "รายงานการเข้าเรียน", icon: "📈" },
 ];
 

@@ -1,9 +1,10 @@
 """Attendance endpoints (spec §10, §13.1).
 
 Permissions:
-- Instructors operate only on sessions of offerings they own.
+- Instructors operate only on sessions of offerings they teach (primary or co-instructor).
 - Admins have full scope; students only check in and read their own records.
 """
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -45,7 +46,10 @@ class SessionScopeMixin:
                 # (previously fell through to the unscoped queryset and
                 # exposed every session).
                 return queryset.none()
-            return queryset.filter(course_offering__instructor=profile).distinct()
+            # อาจารย์หลักหรืออาจารย์ผู้รับผิดชอบร่วม ต่างก็เห็นคาบของรายวิชานี้
+            return queryset.filter(
+                Q(course_offering__instructor=profile) | Q(course_offering__instructors=profile)
+            ).distinct()
         return queryset
 
     def can_manage(self, session: AttendanceSession) -> bool:
@@ -53,7 +57,7 @@ class SessionScopeMixin:
         if user.role == "admin":
             return True
         if user.role == "instructor" and getattr(user, "instructor_profile", None):
-            return session.course_offering.instructor_id == user.instructor_profile.id
+            return session.course_offering.has_instructor(user.instructor_profile)
         return False
 
 
@@ -99,7 +103,9 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
                     "บัญชีนี้ยังไม่มีโปรไฟล์อาจารย์ — ให้ผู้ดูแลเพิ่มข้อมูลในหน้า Instructors ก่อน",
                     "NO_INSTRUCTOR_PROFILE", 400
                 )
-            if offering.instructor_id != profile.id:
+            if offering.instructor_id != profile.id and not offering.instructors.filter(
+                pk=profile.pk
+            ).exists():
                 return error_response(
                     "คุณไม่ได้เป็นอาจารย์ผู้รับผิดชอบรายวิชานี้", "PERMISSION_DENIED", 403
                 )
@@ -233,8 +239,9 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             if profile is None:
                 return qs.none()
             return qs.filter(
-                attendance_session__course_offering__instructor=profile
-            )
+                Q(attendance_session__course_offering__instructor=profile)
+                | Q(attendance_session__course_offering__instructors=profile)
+            ).distinct()
         return qs
 
     def get_serializer_class(self):

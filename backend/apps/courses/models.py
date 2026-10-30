@@ -50,7 +50,13 @@ class CourseOffering(models.Model):
     )
     instructor = models.ForeignKey(
         "accounts.InstructorProfile", on_delete=models.PROTECT, null=True, blank=True,
-        related_name="offerings", verbose_name="อาจารย์ผู้รับผิดชอบ",
+        related_name="offerings", verbose_name="อาจารย์หลัก",
+        help_text="อาจารย์ผู้รับผิดชอบหลัก (ตั้งอัตโนมัติจากคนแรกในรายการ instructors)",
+    )
+    instructors = models.ManyToManyField(
+        "accounts.InstructorProfile", blank=True,
+        related_name="offerings_shared", verbose_name="อาจารย์ผู้รับผิดชอบ",
+        help_text="รายการอาจารย์ผู้รับผิดชอบทั้งหมด — ทุกคนจัดการรายวิชานี้ได้ (คนแรกเป็นอาจารย์หลัก)",
     )
     class_group = models.ForeignKey(
         "academics.ClassGroup", on_delete=models.PROTECT, null=True, blank=True,
@@ -75,6 +81,14 @@ class CourseOffering(models.Model):
     def __str__(self):
         group = f" ({self.class_group.group_code})" if self.class_group else ""
         return f"{self.course.course_code} {self.academic_term}{group}"
+
+    def has_instructor(self, profile) -> bool:
+        """True เมื่อ profile เป็นอาจารย์หลักหรืออาจารย์ร่วมของรายวิชานี้."""
+        if profile is None:
+            return False
+        if self.instructor_id == profile.id:
+            return True
+        return self.instructors.filter(pk=profile.pk).exists()
 
 
 class Enrollment(models.Model):
