@@ -149,7 +149,8 @@
 
 | # | อาการ | สาเหตุ | สถานะ |
 |---|---|---|---|
-| 12 (แก้แล้ว push `c4a13d1`) | DELETE /users/ ตัวที่มี audit log → 500 | `AuditLog.actor` PROTECT — append-only audit ไม่อนุญาตลบ user; destroy ไม่จับ `ProtectedError` | แก้ destroy ให้เตือน "ระงับบัญชีแทนการลบ" (soft delete) แทน 500 — ต้อง deploy |
+| 12 (แก้แล้ว push `c4a13d1`) | DELETE /users/ ตัวที่มี audit log → 500 | `AuditLog.actor` PROTECT — append-only audit ไม่อนุญาตลบ user; destroy ไม่จับ `ProtectedError` | แก้ destroy ให้เตือน "ระงับบัญชีแทนการลบ" (soft delete) — deploy แล้วยืนยันจริงบน prod: DELETE user มี audit → 200 "ระงับ" + `is_active=False`; ไม่มี audit → 204 hard delete |
+| 13 (แก้แล้ว push `38c5173` + `44672b2`) | รายงานจากผู้ใช้จริง: หน้า `/attendance` instructor กด "สร้างคาบเช็คชื่อ" → 500 ("เกิดข้อผิดพลาดในการเชื่อมต่อระบบ") | บัญชี instructor ที่ไม่มี InstructorProfile (สร้างผ่านหน้า Users ได้บัญชีเปล่า) — serializer/view เข้าถึง `user.instructor_profile` ตรง ๆ → `RelatedObjectDoesNotExist` → 500; และก่อนแก้ instructor ไม่มี profile **เห็น sessions/records ของทุกคน** (fallback ไป unscoped queryset) | แก้ 3 ชั้น: 400 `NO_INSTRUCTOR_PROFILE` ข้อความชัดทั้ง view + serializer; scoping ของ sessions + records **fail-closed** (queryset ว่างถ้าไม่มี profile) — ยืนยันจริงบน prod: bare instructor GET sessions/records → 200 ว่าง ✅;ส่วนผู้มี profile สร้าง session ได้ปกติ ✅ (deploy รอบ `38c5173`), view guard `44672b2` ยังรอ deploy รอบถัดไป |
 
 ### ข้อสังเกตด้านโครงสร้าง infra ผลิต
 
