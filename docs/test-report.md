@@ -118,3 +118,40 @@
 
 - ทดสอบ bug #10/#11 ทำโดย probe API จริงด้วย **transaction rollback** บน Postgres ผลิต — ไม่ทิ้งข้อมูลค้าง; ทุกครั้งที่เกิด user กลางคันมี DELETE account (204) เก็บกวาดให้เสมอ
 - Probe จากภายนอก: Python urllib ธรรมดา UA `sams-probe/1.0` — ผ่าน Cloudflare (opener ที่มี cookie เก่าอาจตอบ 403 ลวง ผิดกับ UA/headers ธรรมดา)
+
+## 9. CRUD ทุกตาราง + เปิดเช็คชื่อเต็มรอบบน production (2026-10-30)
+
+สร้างข้อมูลทดสอบชั่วคราว (prefix `SCRT*`) ครบวงจร ทดสอบบน API ผลิต แล้วลบให้ครบท้ายรอบ (บัญชี/แถวทดสอบทั้งหมดไม่ค้าง)
+
+### ตาราง CRUD (ถูกต้องครบทุกขั้นบน Postgres จริง)
+
+| ตาราง | POST | GET detail | PATCH | duplicate guard | หมายเหตุ |
+|---|---|---|---|---|---|
+| programs | ✅ 201 | ✅ 200 | ✅ | ✅ ซ้ำ → 400 | |
+| class-groups | ✅ 201 | ✅ 200 | ✅ | ✅ 400 | กระแทก program FK |
+| academic-terms | ✅ 201 | ✅ 200 | ✅ | ✅ (year+semester) 400 | ปี<พ.ศ. / end<start → 400 |
+| courses | ✅ 201 | ✅ 200 | ✅ | ✅ 400 | credits >12 → 400 |
+| course-offerings | ✅ 201 | ✅ 200 | ✅ (status) | uniq (course+term+group) | |
+| enrollments | ✅ 201 | — | ✅ (dropped↔enrolled) | ✅ ลงซ้ำ 400 | cancelled offering → 400 |
+| class-schedules | ✅ 201 | ✅ 200 | ✅ | | weekday 0-6 |
+| users | ✅ 201 (ทุก role) | ✅ | PATCH | duplicate → 400 | DELETE มีบั๊ก #12 (ล่าสุดแก้แล้ว) |
+| students | ✅ 201 (ใช้ CSV/UI ผ่าน; ดู #11) | ✅ 200 (list + search) | — | | |
+
+### /attendance เปิดเช็คชื่อเต็มรอบ (ผ่านบัญชีอาจารย์ + นักศึกษาทดสอบจริง) — 25/25 PASS
+
+สร้างคาบ `scheduled` → `open` → ออก QR (`qr-token` — rotate ได้ ทุกครั้ง token ใหม่) → นักศึกษา add `POST /attendance/check-in/` (status `present`) → เช็คซ้ำ → **409** → roster อัปเดตเรียลไทม์ → PATCH record (`excused` + `edit_reason`) → `pause` → `open` (resume) → สร้างคาบที่สอง (วันถัดไป) → `cancel` → สร้างคาบซ้ำวันเดียวกัน → **409** `SESSION_ALREADY_EXISTS` → `close` → เช็คชื่อหลังปิด → 400/409 ตามออกแบบ
+
+### RBAC ที่ยืนยันในรอบนี้
+
+- instructor → GET /users/ → 403 · student → GET /users/ และ GET /attendance/sessions/ → 403 ตาม hierarchy
+
+### Bug ใหม่ที่พบ/แก้ในรอบนี้
+
+| # | อาการ | สาเหตุ | สถานะ |
+|---|---|---|---|
+| 12 (แก้แล้ว push `c4a13d1`) | DELETE /users/ ตัวที่มี audit log → 500 | `AuditLog.actor` PROTECT — append-only audit ไม่อนุญาตลบ user; destroy ไม่จับ `ProtectedError` | แก้ destroy ให้เตือน "ระงับบัญชีแทนการลบ" (soft delete) แทน 500 — ต้อง deploy |
+
+### ข้อสังเกตด้านโครงสร้าง infra ผลิต
+
+- มี **ช่วงเวลา** ที่ request รำวรายสลับ 503 "no available server" (Cloudflare) และ 401 `NOT_AUTHENTICATED` แบบไม่อธิบายได้ด้วย app-token — หายเองในหลายนาที. สันนิษฐานว่ามี **แหล่ง backend มากกว่า 1 ตัว** หรือ origin ดับเป็นช่วง; ถ้าเจออาการถี่ ให้เช็ค Coolify (container ตัวเดียว) และ Cloudflare Load Balancing/DNS
+
