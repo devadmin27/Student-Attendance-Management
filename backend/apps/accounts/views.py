@@ -4,6 +4,7 @@ import io
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -70,7 +71,19 @@ class UserViewSet(viewsets.ModelViewSet):
             log_audit(request.user, "user_deactivate", "user", user.pk, request=request)
             return success_response({"id": str(user.pk), "is_active": False},
                                     "มีประวัติการเข้าเรียน — ระงับบัญชีแทนการลบ")
-        response = super().destroy(request, *args, **kwargs)
+        try:
+            response = super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            # Append-only audit logs (actor on_delete=PROTECT) keep referring
+            # to this account — hard delete is impossible by design; fall
+            # back to the documented soft-delete instead of a 500.
+            user.is_active = False
+            user.save(update_fields=["is_active", "updated_at"])
+            log_audit(request.user, "user_deactivate", "user", user.pk, request=request)
+            return success_response(
+                {"id": str(user.pk), "is_active": False},
+                "บัญชีถูกอ้างอิงโดยบันทึก audit — ระงับบัญชีแทนการลบ",
+            )
         log_audit(request.user, "user_delete", "user", kwargs.get("pk"), request=request)
         return response
 
