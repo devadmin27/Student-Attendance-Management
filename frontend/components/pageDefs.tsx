@@ -102,7 +102,7 @@ export const enrollmentFields: FieldDef[] = [
     optionsKey: "students",
     placeholder: "พิมพ์รหัสนักศึกษา…",
   },
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select-search", required: true, optionsKey: "course-offerings", placeholder: "พิมพ์รหัสวิชา…" },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings" },
   { name: "enrollment_status", label: "สถานะการลงทะเบียน", type: "select", options: ENROLLMENT_STATUS_OPTIONS, defaultValue: "enrolled" },
 ];
 
@@ -256,7 +256,7 @@ export function BulkEnrollButton({ refresh }: { refresh: () => void }) {
 // ── class schedules ────────────────────────────────────────────────────
 
 export const scheduleFields: FieldDef[] = [
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select-search", required: true, optionsKey: "course-offerings", placeholder: "พิมพ์รหัสวิชา…" },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings" },
   { name: "weekday", label: "วันเรียน", type: "select", required: true, options: WEEKDAY_OPTIONS, defaultValue: "0" },
   { name: "start_time", label: "เวลาเริ่มสอน", type: "time", required: true },
   { name: "end_time", label: "เวลาสิ้นสุด", type: "time", required: true },
