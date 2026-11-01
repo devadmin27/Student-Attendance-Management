@@ -50,6 +50,172 @@ export interface FilterDef {
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
+const isUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(v);
+
+/**
+ * Autocomplete select (select-search fields: รายวิชา, นักศึกษา, กลุ่มเรียน, …).
+ * - List appears as a dropdown directly BELOW the input (top-full), never
+ *   covering the field itself.
+ * - Only options matching the typed text (code or label, case-insensitive)
+ *   are shown.
+ * - Keyboard: ↓/↑ move the highlight, Enter picks the highlighted option
+ *   (and does NOT submit the form while open), Escape closes, Tab moves on.
+ * - Mouse: click picks; hovering updates the highlight.
+ * This component backs every CrudPage using type:"select-search".
+ */
+function SelectSearchField({
+  name,
+  label,
+  required,
+  placeholder,
+  options,
+  value,
+  text,
+  onTextChange,
+  onSelect,
+}: {
+  name: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  options: Option[];
+  value: string;
+  text: string;
+  onTextChange: (t: string) => void; // set __text (clears id when no longer matching)
+  onSelect: (id: string, label: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const needle = text.trim().toLowerCase();
+  // FK options carry UUID values — searching a UUID substring (e.g. "22" inside
+  // a generated id) would surface unrelated subjects. Match the visible label
+  // always; match the raw value only when it is not a UUID (plain-code options).
+  const filtered = useMemo(
+    () =>
+      needle
+        ? options
+            .filter(
+              (o) =>
+                o.label.toLowerCase().includes(needle) ||
+                (!isUuid(o.value) && o.value.toLowerCase().includes(needle)),
+            )
+            .slice(0, 30)
+        : [],
+    [needle, options],
+  );
+
+  // New search text starts highlight back at the first match.
+  useEffect(() => {
+    setActive(0);
+  }, [needle]);
+
+  // Keep the highlighted option visible while moving with the keyboard.
+  useEffect(() => {
+    if (!open) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-idx="${active}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  const pick = (o: Option) => {
+    onSelect(o.value, o.label);
+    setOpen(false);
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (filtered.length === 0) return;
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      setActive((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open || filtered.length === 0) return;
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (event.key === "Enter") {
+      // Open + something highlighted → pick it and suppress the form submit.
+      // Closed → fall through so the form submits normally.
+      if (open && filtered[active]) {
+        event.preventDefault();
+        pick(filtered[active]);
+      }
+    } else if (event.key === "Escape") {
+      if (open) {
+        event.preventDefault();
+        setOpen(false);
+      }
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={name} className="text-sm font-medium text-slate-700">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      <input type="hidden" name={name} id={`field-${name}`} required={required} value={value} readOnly />
+      <div className="relative">
+        <input
+          type="text"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={`list-${name}`}
+          aria-autocomplete="list"
+          autoComplete="off"
+          placeholder={placeholder ?? "พิมพ์เพื่อค้นหา…"}
+          value={text}
+          onChange={(event) => {
+            onTextChange(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => {
+            if (needle) setOpen(true);
+          }}
+          onBlur={() => setOpen(false)}
+          onKeyDown={onKeyDown}
+          className={inputClass}
+        />
+        {open && (
+          <div
+            id={`list-${name}`}
+            ref={listRef}
+            role="listbox"
+            className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"
+          >
+            {filtered.length === 0 && (
+              <div className="px-3 py-2 text-sm text-slate-400">ไม่พบรายการที่ค้นหา</div>
+            )}
+            {filtered.map((o, i) => (
+              <button
+                key={o.value}
+                type="button"
+                role="option"
+                aria-selected={value === o.value}
+                data-idx={i}
+                // keep focus (and the open state) so the blur-based close
+                // never fires before the click registers
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(o)}
+                className={`block w-full px-3 py-2 text-left text-sm ${
+                  i === active ? "bg-blue-100 text-blue-900" : ""
+                } ${value === o.value ? "font-medium underline decoration-blue-400 underline-offset-2" : ""}`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function CrudPage<T extends { id: string }>({
   // `title` remains a valid prop declared in the signature below; it is only
   // used for documentation/typing, the page renders its own AppShell heading.
@@ -433,69 +599,29 @@ export default function CrudPage<T extends { id: string }>({
                 .map((f) => {
                   const options = optionsFor(f);
                   if (f.type === "select-search") {
-                    const text = String(form[`${f.name}__text`] ?? "");
-                    const needle = text.trim().toLowerCase();
-                    // Autocomplete: ซ่อนรายการจนกว่าจะพิมพ์ค้นหา; พิมพ์แล้วแสดงผลลัพธ์ที่กรองแล้วเป็น dropdown ลอย
-                    const searching = needle.length > 0;
-                    const filtered = searching
-                      ? options.filter(
-                          (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
-                        ).slice(0, 30)
-                      : [];
                     return (
-                      <div key={f.name} className="relative flex flex-col gap-1">
-                        <label htmlFor={`field-${f.name}`} className="text-sm font-medium text-slate-700">
-                          {f.label}
-                          {f.required && <span className="text-red-500"> *</span>}
-                        </label>
-                        <input
-                          id={`field-${f.name}`}
-                          type="hidden"
-                          name={f.name}
-                          required={f.required}
-                          value={String(form[f.name] ?? "")}
-                          readOnly
-                        />
-                        <input
-                          data-search-input={f.name}
-                          type="text"
-                          autoComplete="off"
-                          placeholder={f.placeholder ?? "พิมพ์เพื่อค้นหา…"}
-                          value={text}
-                          onChange={(e) => {
-                            const next = e.target.value;
-                            setForm((p) => {
-                              const clean = { ...p, [`${f.name}__text`]: next };
-                              // ตัด id ออกทันทีที่ข้อความไม่ตรงกับตัวเลือกที่ถืออยู่
-                              const opt = options.find((o) => o.value === p[f.name]);
-                              if (!opt || opt.label !== next) clean[f.name] = "";
-                              return clean;
-                            });
-                          }}
-                          className={inputClass}
-                        />
-                        {searching && (
-                          <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                            {filtered.length === 0 && (
-                              <div className="px-3 py-2 text-sm text-slate-400">ไม่พบรายการที่ค้นหา</div>
-                            )}
-                            {filtered.map((o) => (
-                              <button
-                                key={o.value}
-                                type="button"
-                                onClick={() =>
-                                  setForm((p) => ({ ...p, [f.name]: o.value, [`${f.name}__text`]: o.label }))
-                                }
-                                className={`block w-full px-3 py-2 text-left text-sm hover:bg-blue-50 ${
-                                  form[f.name] === o.value ? "bg-blue-50 font-medium text-blue-800" : ""
-                                }`}
-                              >
-                                {o.label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      <SelectSearchField
+                        key={f.name}
+                        name={f.name}
+                        label={f.label}
+                        required={f.required}
+                        placeholder={f.placeholder}
+                        options={options}
+                        value={String(form[f.name] ?? "")}
+                        text={String(form[`${f.name}__text`] ?? "")}
+                        onTextChange={(text) =>
+                          setForm((p) => {
+                            const clean = { ...p, [`${f.name}__text`]: text };
+                            // ตัด id ออกทันทีที่ข้อความไม่ตรงกับตัวเลือกที่ถืออยู่
+                            const opt = options.find((o) => o.value === p[f.name]);
+                            if (!opt || opt.label !== text) clean[f.name] = "";
+                            return clean;
+                          })
+                        }
+                        onSelect={(id, label) =>
+                          setForm((p) => ({ ...p, [f.name]: id, [`${f.name}__text`]: label }))
+                        }
+                      />
                     );
                   }
                   if (f.type === "multiselect") {
