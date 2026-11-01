@@ -39,6 +39,16 @@ class IsAdminOrInstructor(RoleRequired):
     allowed_roles = {"admin", "instructor"}
 
 
+class AdminOnly(BasePermission):
+    """Hard admin-only gate — ignores view.allowed_roles so it can be layered
+    on viewsets that allow wider read access."""
+
+    message = "คุณไม่มีสิทธิ์เข้าถึงส่วนนี้"
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == "admin")
+
+
 class IsOwnerOrAdmin(BasePermission):
     """Object-level: students may only access their own data (IDOR guard)."""
 

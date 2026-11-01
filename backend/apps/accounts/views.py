@@ -25,8 +25,10 @@ from apps.accounts.serializers import (
 from apps.audit.models import log_audit
 from apps.audit.throttles import CSVImportThrottle
 from apps.attendance.models import AttendanceSession
-from common.permissions import IsAdmin
+from common.permissions import AdminOnly, IsAdmin, IsAdminOrInstructor, RoleRequired
 from common.responses import success_response
+
+WRITE_ACTIONS = {"create", "update", "partial_update", "destroy"}
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -106,12 +108,17 @@ class UserViewSet(viewsets.ModelViewSet):
 
 class StudentProfileViewSet(viewsets.ModelViewSet):
     """Students list (+admin CRUD). Backend has all data; students scope
-    their own data — never exposing cross-student info."""
+    their own data — never exposing cross-student info.
+
+    Instructors may READ students they plausibly teach (those in the class
+    groups of their offerings, or enrolled in their offerings) for the
+    enrollment/students pickers; every mutating action stays admin-only."""
 
     queryset = StudentProfile.objects.select_related(
         "user", "program", "class_group"
     )
-    permission_classes = [IsAdmin]
+    permission_classes = [RoleRequired]
+    allowed_roles = {"admin", "instructor"}
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = {
         "program": ["exact"],
@@ -122,6 +129,31 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
     search_fields = ["student_code", "first_name", "last_name", "user__username"]
     ordering_fields = ["student_code", "first_name", "last_name", "academic_year_level"]
     ordering = ["student_code"]
+
+    def get_permissions(self):
+        if self.action in WRITE_ACTIONS or self.action == "import_csv":
+            return [AdminOnly()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == "instructor":
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None:
+                return qs.none()
+            from apps.courses.models import CourseOffering
+            from django.db.models import Q
+
+            own = CourseOffering.objects.filter(
+                Q(instructor=profile) | Q(instructors=profile)
+            )
+            self_group_ids = own.values_list("class_group_id", flat=True)
+            return qs.filter(
+                Q(class_group_id__in=list(self_group_ids))
+                | Q(enrollments__course_offering__in=own)
+            ).distinct()
+        return qs
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -202,14 +234,22 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
 
 
 class InstructorProfileViewSet(viewsets.ModelViewSet):
+    """Instructors list — admin CRUD; instructors may READ (option pickers
+    for co-instructor selection on their management pages)."""
+
     queryset = InstructorProfile.objects.select_related("user")
     serializer_class = InstructorProfileSerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrInstructor]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = {"status": ["exact"]}
     search_fields = ["employee_code", "first_name", "last_name", "user__username"]
     ordering_fields = ["employee_code", "first_name", "last_name"]
     ordering = ["employee_code"]
+
+    def get_permissions(self):
+        if self.action in WRITE_ACTIONS:
+            return [IsAdmin()]
+        return super().get_permissions()
 
     def create(self, request, *args, **kwargs):
         payload = request.data

@@ -435,13 +435,15 @@ export default function CrudPage<T extends { id: string }>({
                   if (f.type === "select-search") {
                     const text = String(form[`${f.name}__text`] ?? "");
                     const needle = text.trim().toLowerCase();
-                    const filtered = needle
+                    // Autocomplete: ซ่อนรายการจนกว่าจะพิมพ์ค้นหา; พิมพ์แล้วแสดงผลลัพธ์ที่กรองแล้วเป็น dropdown ลอย
+                    const searching = needle.length > 0;
+                    const filtered = searching
                       ? options.filter(
                           (o) => o.label.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle),
-                        )
-                      : options;
+                        ).slice(0, 30)
+                      : [];
                     return (
-                      <div key={f.name} className="flex flex-col gap-1">
+                      <div key={f.name} className="relative flex flex-col gap-1">
                         <label htmlFor={`field-${f.name}`} className="text-sm font-medium text-slate-700">
                           {f.label}
                           {f.required && <span className="text-red-500"> *</span>}
@@ -455,37 +457,44 @@ export default function CrudPage<T extends { id: string }>({
                           readOnly
                         />
                         <input
+                          data-search-input={f.name}
                           type="text"
                           autoComplete="off"
                           placeholder={f.placeholder ?? "พิมพ์เพื่อค้นหา…"}
                           value={text}
-                          onChange={(e) =>
-                            setForm((p) => ({ ...p, [f.name]: "", [`${f.name}__text`]: e.target.value }))
-                          }
-                          onFocus={(e) => {
-                            e.currentTarget.select();
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            setForm((p) => {
+                              const clean = { ...p, [`${f.name}__text`]: next };
+                              // ตัด id ออกทันทีที่ข้อความไม่ตรงกับตัวเลือกที่ถืออยู่
+                              const opt = options.find((o) => o.value === p[f.name]);
+                              if (!opt || opt.label !== next) clean[f.name] = "";
+                              return clean;
+                            });
                           }}
                           className={inputClass}
                         />
-                        <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-                          {filtered.length === 0 && (
-                            <div className="px-3 py-2 text-sm text-slate-400">ไม่พบรายการที่ค้นหา</div>
-                          )}
-                          {filtered.map((o) => (
-                            <button
-                              key={o.value}
-                              type="button"
-                              onClick={() =>
-                                setForm((p) => ({ ...p, [f.name]: o.value, [`${f.name}__text`]: o.label }))
-                              }
-                              className={`block w-full px-3 py-2 text-left text-sm hover:bg-blue-50 ${
-                                form[f.name] === o.value ? "bg-blue-50 font-medium text-blue-800" : ""
-                              }`}
-                            >
-                              {o.label}
-                            </button>
-                          ))}
-                        </div>
+                        {searching && (
+                          <div className="absolute left-0 right-0 z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                            {filtered.length === 0 && (
+                              <div className="px-3 py-2 text-sm text-slate-400">ไม่พบรายการที่ค้นหา</div>
+                            )}
+                            {filtered.map((o) => (
+                              <button
+                                key={o.value}
+                                type="button"
+                                onClick={() =>
+                                  setForm((p) => ({ ...p, [f.name]: o.value, [`${f.name}__text`]: o.label }))
+                                }
+                                className={`block w-full px-3 py-2 text-left text-sm hover:bg-blue-50 ${
+                                  form[f.name] === o.value ? "bg-blue-50 font-medium text-blue-800" : ""
+                                }`}
+                              >
+                                {o.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   }
