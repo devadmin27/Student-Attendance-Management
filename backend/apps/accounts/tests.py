@@ -2,6 +2,7 @@
 import uuid
 from datetime import timedelta
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -265,3 +266,73 @@ class DashboardTests(BaseSamsTest):
         response = self.client.get("/api/v1/health/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"]["database"], "connected")
+
+
+class StudentCSVImportTests(BaseSamsTest):
+    """CSV import takes its program/class-group scope from the upload form."""
+
+    CSV = (
+        "username,student_code,first_name,last_name,password\n"
+        "imp001,690001,นักเรียน,นำเข้า,Str0ngStud!Pass\n"
+    )
+
+    def upload(self, program=None, class_group=None):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        payload = {
+            "file": SimpleUploadedFile(
+                "students.csv", self.CSV.encode("utf-8"), content_type="text/csv"
+            )
+        }
+        if program is not None:
+            payload["program"] = str(program.pk)
+        if class_group is not None:
+            payload["class_group"] = str(class_group.pk)
+        return self.client.post("/api/v1/students/import-csv/", payload, format="multipart")
+
+    def test_import_assigns_selected_program_and_class_group(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.upload(self.program, self.group)
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        self.assertEqual(response.data["data"]["created"], 1)
+        profile = StudentProfile.objects.get(student_code="690001")
+        self.assertEqual(profile.program, self.program)
+        self.assertEqual(profile.class_group, self.group)
+        # ชั้นปีเริ่มต้นมาจากกลุ่มเรียนเมื่อไฟล์ไม่มีคอลัมน์ academic_year_level
+        self.assertEqual(profile.academic_year_level, self.group.academic_year_level)
+
+    def test_import_class_group_alone_derives_program(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.upload(class_group=self.group)
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        profile = StudentProfile.objects.get(student_code="690001")
+        self.assertEqual(profile.program, self.program)
+        self.assertEqual(profile.class_group, self.group)
+
+    def test_import_rejects_class_group_from_another_program(self):
+        other_program = Program.objects.create(
+            program_code="MTH", program_name="คณิตศาสตร์"
+        )
+        other_group = ClassGroup.objects.create(
+            group_code="MTH-1", group_name="ห้อง 1", program=other_program
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.upload(self.program, other_group)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "CLASS_GROUP_PROGRAM_MISMATCH")
+        self.assertFalse(StudentProfile.objects.filter(student_code="690001").exists())
+
+    def test_import_rejects_unknown_program(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.client.post(
+            "/api/v1/students/import-csv/",
+            {
+                "file": SimpleUploadedFile(
+                    "students.csv", self.CSV.encode("utf-8"), content_type="text/csv"
+                ),
+                "program": "00000000-0000-0000-0000-000000000000",
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "PROGRAM_NOT_FOUND")

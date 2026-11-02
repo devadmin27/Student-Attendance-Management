@@ -2,7 +2,7 @@
 import csv
 import io
 
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from rest_framework import status, viewsets
@@ -15,6 +15,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from apps.accounts.models import StudentProfile, User, InstructorProfile
+from apps.academics.models import ClassGroup, Program
 from apps.accounts.serializers import (
     InstructorProfileSerializer,
     StudentCreateSerializer,
@@ -193,6 +194,48 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # ขอบเขตของชุดนำเข้า: หลักสูตร + กลุ่มเรียนที่เลือกจาก modal หน้า /students
+        program, class_group = None, None
+        program_id = str(request.data.get("program") or "").strip()
+        class_group_id = str(request.data.get("class_group") or "").strip()
+        try:
+            if program_id:
+                program = Program.objects.filter(pk=program_id).first()
+                if program is None:
+                    return Response(
+                        {"success": False, "message": "ไม่พบหลักสูตรที่เลือก", "code": "PROGRAM_NOT_FOUND"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            if class_group_id:
+                class_group = (
+                    ClassGroup.objects.select_related("program").filter(pk=class_group_id).first()
+                )
+                if class_group is None:
+                    return Response(
+                        {"success": False, "message": "ไม่พบกลุ่มเรียนที่เลือก", "code": "CLASS_GROUP_NOT_FOUND"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if program is not None and class_group.program_id != program.pk:
+                    return Response(
+                        {
+                            "success": False,
+                            "message": "กลุ่มเรียนที่เลือกไม่ได้อยู่ในหลักสูตรที่เลือก",
+                            "code": "CLASS_GROUP_PROGRAM_MISMATCH",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                program = program or class_group.program
+        except (DjangoValidationError, ValueError):
+            return Response(
+                {
+                    "success": False,
+                    "message": "รหัสหลักสูตรหรือกลุ่มเรียนไม่ถูกต้อง",
+                    "code": "IMPORT_SCOPE_INVALID",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         created, errors = 0, []
         with transaction.atomic():
             for i, row in enumerate(reader, start=2):
@@ -219,14 +262,24 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                     # payloads like =HYPERLINK(...) ever entering the system.
                     profile.first_name = sanitize_csv_value(row["first_name"])
                     profile.last_name = sanitize_csv_value(row["last_name"])
-                    profile.academic_year_level = int(row.get("academic_year_level") or 1)
+                    if program is not None:
+                        profile.program = program
+                    if class_group is not None:
+                        profile.class_group = class_group
+                    default_year = class_group.academic_year_level if class_group else 1
+                    profile.academic_year_level = int(row.get("academic_year_level") or default_year)
                     profile.save()
                     created += 1
                 except (ValueError, TypeError, KeyError) as exc:
                     errors.append({"row": i, "message": str(exc)})
         log_audit(
             request.user, "students_import", "student_profile",
-            metadata={"created": created, "failed": len(errors)},
+            metadata={
+                "created": created,
+                "failed": len(errors),
+                "program": str(program.pk) if program else None,
+                "class_group": str(class_group.pk) if class_group else None,
+            },
             request=request,
         )
         message = f"นำเข้าสำเร็จ {created} รายการ" + (f" ล้มเหลว {len(errors)} รายการ" if errors else "")
