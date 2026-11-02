@@ -20,9 +20,8 @@ export default function InstructorCourseOfferingsPage() {
         emptyMessage="ยังไม่มีรายวิชาที่คุณเปิดสอน"
         columns={offeringColumns}
         filters={offeringFilters}
-        /* รายวิชาที่มีคาบเช็คชื่อ/การลงทะเบียนผูกอยู่ปิดใช้งานแทนการลบ (PROTECT FK)
-           — การลบจึงเป็นงานของผู้ดูแล */
-        canDelete={false}
+        /* ลบได้เฉพาะรายวิชาที่ตนสอน (backend scope + ownership guard) —
+           ถ้ามีการลงทะเบียน/คาบเช็คชื่อผูกอยู่ ระบบจะปิดสถานะเป็นยกเลิกแทน */
       />
     </AppShell>
   );

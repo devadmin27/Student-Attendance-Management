@@ -84,6 +84,26 @@ class CourseOfferingViewSet(viewsets.ModelViewSet):
         instance = serializer.save()
         log_audit(self.request.user, "offering_update", "course_offering", instance.pk, request=self.request)
 
+    def perform_destroy(self, instance):
+        """ลบการเปิดสอน: อาจารย์ลบได้เฉพาะของตน; ถ้ามีข้อมูลผูก (PROTECT)
+        ให้ปิดสถานะเป็นยกเลิกแทนการลบจริง เพื่อรักษาความถูกต้องอ้างอิง"""
+        user = self.request.user
+        if user.role == "instructor":
+            profile = getattr(user, "instructor_profile", None)
+            if profile is None or not instance.has_instructor(profile):
+                raise PermissionDenied("คุณลบการเปิดสอนได้เฉพาะรายวิชาที่คุณสอน")
+        busy = instance.enrollments.exists() or instance.attendance_sessions.exists()
+        if busy:
+            if instance.status != "cancelled":
+                instance.status = "cancelled"
+                instance.save(update_fields=["status", "updated_at"])
+            log_audit(
+                user, "offering_soft_delete", "course_offering", instance.pk, request=self.request
+            )
+            return
+        log_audit(user, "offering_delete", "course_offering", instance.pk, request=self.request)
+        super().perform_destroy(instance)
+
 
 class EnrollmentViewSet(viewsets.ModelViewSet):
     queryset = Enrollment.objects.select_related(

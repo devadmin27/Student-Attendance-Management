@@ -67,6 +67,43 @@ class MultiInstructorOfferingTests(BaseSamsTest):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
 
 
+class OfferingDeleteTests(BaseSamsTest):
+    """อาจารย์ลบการเปิดสอนของตนได้; ของคนอื่นไม่ได้; ที่มีข้อมูลผูกจะถูกยกเลิกแทน"""
+
+    def login_instructor(self):
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+
+    def test_instructor_deletes_own_empty_offering(self):
+        self.login_instructor()
+        # offering ที่ไม่มีข้อมูลลูก (BaseSamsTest ผูก enrollment กับ self.offering)
+        empty = CourseOffering.objects.create(
+            course=self.course, academic_term=self.term, instructor=self.instructor,
+        )
+        response = self.client.delete(f"/api/v1/course-offerings/{empty.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(CourseOffering.objects.filter(pk=empty.pk).exists())
+
+    def test_instructor_delete_offering_with_enrollment_soft_deletes(self):
+        self.login_instructor()
+        response = self.client.delete(f"/api/v1/course-offerings/{self.offering.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", None))
+        self.offering.refresh_from_db()
+        self.assertEqual(self.offering.status, "cancelled")
+        self.assertTrue(Enrollment.objects.filter(pk=self.enrollment.pk).exists())
+
+    def test_instructor_cannot_delete_other_teachers_offering(self):
+        other = User.objects.create_user(
+            "teacher9", "t9@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        foreign = CourseOffering.objects.create(
+            course=self.course, academic_term=self.term, instructor=other.instructor_profile,
+        )
+        self.login_instructor()
+        response = self.client.delete(f"/api/v1/course-offerings/{foreign.pk}/")
+        self.assertIn(response.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND))
+        self.assertTrue(CourseOffering.objects.filter(pk=foreign.pk).exists())
+
+
 class EnrollmentRBACTests(BaseSamsTest):
     def login_instructor(self):
         self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
