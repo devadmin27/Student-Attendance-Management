@@ -6,7 +6,7 @@
  * - Live roster (polls every few seconds) + audited manual status edit
  */
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useParams } from "next/navigation";
 import QRCode from "react-qr-code";
 import AppShell from "@/components/AppShell";
@@ -22,12 +22,15 @@ const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
 // ขนาด QR: ค่าเริ่มต้นใหญ่เป็น 2 เท่าของเดิม (190 → 380) และให้ผู้ใช้ปรับเองได้
-// เพดาน 440px พอดีกับความกว้างการ์ด QR ในเลย์เอาต์ปัจจุบัน (ใหญ่กว่านี้จะถูกย่อให้พอดีกับพื้นที่)
+// การ์ด QR กว้างตามขนาดที่เลือก (ไม่ใช่คอลัมน์กริดคงที่) เพื่อให้ขนาดจริงตรงกับที่ตั้งไว้
 const QR_SIZE_DEFAULT = 380;
 const QR_SIZE_MIN = 160;
-const QR_SIZE_MAX = 440;
+const QR_SIZE_MAX = 480;
 const QR_SIZE_STEP = 20;
 const QR_SIZE_STORAGE_KEY = "sams.qr-size";
+// ความกว้างการ์ดที่ต้องเผื่อให้ QR: border 2 + p-4 32 + p-3 24 + p-2 16 = 74px + เผื่อ 2px
+const QR_PANEL_EXTRA = 76;
+const QR_PANEL_MIN_WIDTH = 320;
 
 export default function SessionControlPage() {
   return (
@@ -274,9 +277,16 @@ function SessionControlContent() {
           </span>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-5">
+        <div className="flex flex-col gap-4 xl:flex-row">
           {/* QR display */}
-          <div className="lg:col-span-2">
+          <div
+            className="xl:w-[var(--qr-panel-width)] xl:shrink-0"
+            style={
+              {
+                "--qr-panel-width": `${Math.max(QR_PANEL_MIN_WIDTH, qrSize + QR_PANEL_EXTRA)}px`,
+              } as CSSProperties
+            }
+          >
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="mb-2 text-sm font-semibold text-slate-800">QR Code เช็คชื่อ (Rotating Token)</h2>
               <p className="mb-3 text-xs text-slate-500">
@@ -284,10 +294,10 @@ function SessionControlContent() {
               </p>
               {session.status === "open" ? (
                 <div className="space-y-3">
-                  <div className="flex justify-center rounded-xl bg-slate-50 p-4">
+                  <div className="flex justify-center rounded-xl bg-slate-50 p-3">
                     {token ? (
                       <div className="flex w-full max-w-full flex-col items-center gap-3">
-                        <div className="w-full rounded-lg bg-white p-3 shadow-sm">
+                        <div className="w-full rounded-lg bg-white p-2 shadow-sm">
                           <QRCode
                             value={token.qr}
                             size={qrSize}
@@ -328,7 +338,7 @@ function SessionControlContent() {
                               step={QR_SIZE_STEP}
                               value={qrSize}
                               onChange={(e) => updateQrSize(Number(e.target.value))}
-                              className="h-2 flex-1 cursor-pointer accent-blue-700"
+                              className="h-2 min-w-0 flex-1 cursor-pointer accent-blue-700"
                             />
                             <button
                               type="button"
@@ -440,7 +450,7 @@ function SessionControlContent() {
           </div>
 
           {/* Roster */}
-          <div className="lg:col-span-3">
+          <div className="min-w-0 xl:flex-1">
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-3 flex flex-wrap items-center gap-3">
                 <h2 className="text-sm font-semibold text-slate-800">รายชื่อคาบเรียน</h2>
