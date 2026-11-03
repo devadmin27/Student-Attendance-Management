@@ -21,6 +21,14 @@ import type { AttendanceRecord, AttendanceSession, QRTokenInfo, RosterRow } from
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
+// ขนาด QR: ค่าเริ่มต้นใหญ่เป็น 2 เท่าของเดิม (190 → 380) และให้ผู้ใช้ปรับเองได้
+// เพดาน 440px พอดีกับความกว้างการ์ด QR ในเลย์เอาต์ปัจจุบัน (ใหญ่กว่านี้จะถูกย่อให้พอดีกับพื้นที่)
+const QR_SIZE_DEFAULT = 380;
+const QR_SIZE_MIN = 160;
+const QR_SIZE_MAX = 440;
+const QR_SIZE_STEP = 20;
+const QR_SIZE_STORAGE_KEY = "sams.qr-size";
+
 export default function SessionControlPage() {
   return (
     <Suspense fallback={<div className="p-10 text-center text-sm text-slate-500">กำลังโหลด…</div>}>
@@ -43,6 +51,22 @@ function SessionControlContent() {
   const [actionBusy, setActionBusy] = useState(false);
   const [rosterAutoRefresh, setRosterAutoRefresh] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
+  const [qrSize, setQrSize] = useState(QR_SIZE_DEFAULT);
+
+  // อ่านขนาด QR ที่ผู้ใช้ปรับไว้ (เฉพาะฝั่งเบราว์เซอร์) — เขียนค่าที่จุดเปลี่ยนขนาดเท่านั้น
+  // เพื่อไม่ให้ Strict Mode เขียนทับค่าที่บันทึกไว้ตอน mount
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem(QR_SIZE_STORAGE_KEY));
+    if (Number.isFinite(saved) && saved >= QR_SIZE_MIN && saved <= QR_SIZE_MAX) {
+      setQrSize(saved);
+    }
+  }, []);
+
+  const updateQrSize = (next: number) => {
+    const clamped = Math.min(QR_SIZE_MAX, Math.max(QR_SIZE_MIN, next));
+    setQrSize(clamped);
+    window.localStorage.setItem(QR_SIZE_STORAGE_KEY, String(clamped));
+  };
 
   const ONE_SHOT_REISSUE_MARGIN = 2; // seconds before expiry
 
@@ -262,16 +286,74 @@ function SessionControlContent() {
                 <div className="space-y-3">
                   <div className="flex justify-center rounded-xl bg-slate-50 p-4">
                     {token ? (
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="rounded-lg bg-white p-3 shadow-sm">
-                          <QRCode value={token.qr} size={190} />
+                      <div className="flex w-full max-w-full flex-col items-center gap-3">
+                        <div className="w-full rounded-lg bg-white p-3 shadow-sm">
+                          <QRCode
+                            value={token.qr}
+                            size={qrSize}
+                            style={{
+                              width: "100%",
+                              height: "auto",
+                              maxWidth: `${qrSize}px`,
+                              display: "block",
+                              margin: "0 auto",
+                            }}
+                          />
                         </div>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-center text-xs text-slate-500">
                           หมดอายุในอีก <strong className="tabular-nums text-slate-800">{secondsLeft}s</strong> · ระบบจะหมุนเวียน token ใหม่เอง
+                        </div>
+                        <div className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-center justify-between text-xs text-slate-600">
+                            <label htmlFor="qr-size" className="font-medium">
+                              ขนาด QR Code
+                            </label>
+                            <span className="tabular-nums font-semibold text-slate-800">{qrSize}px</span>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              type="button"
+                              aria-label="ลดขนาด QR Code"
+                              onClick={() => updateQrSize(qrSize - QR_SIZE_STEP)}
+                              disabled={qrSize <= QR_SIZE_MIN}
+                              className="h-7 w-7 shrink-0 rounded-md border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              −
+                            </button>
+                            <input
+                              id="qr-size"
+                              type="range"
+                              min={QR_SIZE_MIN}
+                              max={QR_SIZE_MAX}
+                              step={QR_SIZE_STEP}
+                              value={qrSize}
+                              onChange={(e) => updateQrSize(Number(e.target.value))}
+                              className="h-2 flex-1 cursor-pointer accent-blue-700"
+                            />
+                            <button
+                              type="button"
+                              aria-label="เพิ่มขนาด QR Code"
+                              onClick={() => updateQrSize(qrSize + QR_SIZE_STEP)}
+                              disabled={qrSize >= QR_SIZE_MAX}
+                              className="h-7 w-7 shrink-0 rounded-md border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              +
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateQrSize(QR_SIZE_DEFAULT)}
+                              className="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                            >
+                              รีเซ็ต
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ) : (
-                      <div className="flex h-[220px] w-[220px] items-center justify-center rounded bg-slate-200 animate-pulse text-sm text-slate-500">
+                      <div
+                        className="flex aspect-square w-full animate-pulse items-center justify-center rounded bg-slate-200 text-sm text-slate-500"
+                        style={{ maxWidth: qrSize }}
+                      >
                         กำลังออก token…
                       </div>
                     )}
