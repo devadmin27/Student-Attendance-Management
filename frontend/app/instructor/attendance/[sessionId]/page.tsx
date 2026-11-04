@@ -6,7 +6,15 @@
  * - Live roster (polls every few seconds) + audited manual status edit
  */
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useParams } from "next/navigation";
 import QRCode from "react-qr-code";
 import AppShell from "@/components/AppShell";
@@ -16,7 +24,7 @@ import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { formatThaiDate, formatThaiTime } from "@/lib/format";
 import { alertError, confirmDialog, promptReason, toastSuccess } from "@/lib/swal";
-import type { AttendanceRecord, AttendanceSession, QRTokenInfo, RosterRow } from "@/lib/types";
+import type { AttendanceSession, QRTokenInfo, RosterRow } from "@/lib/types";
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
@@ -31,6 +39,31 @@ const QR_SIZE_STORAGE_KEY = "sams.qr-size";
 // ความกว้างการ์ดที่ต้องเผื่อให้ QR: border 2 + p-4 32 + p-3 24 + p-2 16 = 74px + เผื่อ 2px
 const QR_PANEL_EXTRA = 76;
 const QR_PANEL_MIN_WIDTH = 320;
+
+// ---- Live roster polling ----
+// ถี่เฉพาะตอนเปิดเช็คชื่อและอยู่ในหน้าต่างเวลา; นอกนั้นลดความถี่ลงมาก
+// และหยุดสนิทเมื่อปิด/ยกเลิกคาบ, ปิด auto-refresh หรือซ่อนแท็บ
+const POLL_OPEN_IN_WINDOW_MS = 5_000;
+const POLL_OPEN_OUT_OF_WINDOW_MS = 25_000;
+const POLL_PENDING_MS = 15_000;
+// 429 backoff: 10 → 20 → 40 → 60 วินาที (คงที่ที่ 60 หลังจากนั้น)
+const POLL_RATE_LIMIT_BACKOFF_MS = [10_000, 20_000, 40_000, 60_000];
+// QR re-issue backoff เมื่อออก token ไม่สำเร็จ: 5 → 10 → 20 → 30 วินาที
+const QR_REISSUE_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000];
+const ONE_SHOT_REISSUE_MARGIN = 2; // seconds before expiry
+
+function rosterPollInterval(session: AttendanceSession): number {
+  if (session.status !== "open") return POLL_PENDING_MS;
+  const now = Date.now();
+  const start = new Date(session.check_in_start).getTime();
+  const end = new Date(
+    session.check_in_effective_end ?? session.check_in_end,
+  ).getTime();
+  if (Number.isFinite(start) && Number.isFinite(end) && now >= start && now <= end) {
+    return POLL_OPEN_IN_WINDOW_MS;
+  }
+  return POLL_OPEN_OUT_OF_WINDOW_MS;
+}
 
 export default function SessionControlPage() {
   return (
@@ -47,31 +80,43 @@ function SessionControlContent() {
 
   const [session, setSession] = useState<AttendanceSession | null>(null);
   const [roster, setRoster] = useState<RosterRow[]>([]);
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<QRTokenInfo | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [actionBusy, setActionBusy] = useState(false);
   const [rosterAutoRefresh, setRosterAutoRefresh] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
-  const [qrSize, setQrSize] = useState(QR_SIZE_DEFAULT);
-
-  // อ่านขนาด QR ที่ผู้ใช้ปรับไว้ (เฉพาะฝั่งเบราว์เซอร์) — เขียนค่าที่จุดเปลี่ยนขนาดเท่านั้น
-  // เพื่อไม่ให้ Strict Mode เขียนทับค่าที่บันทึกไว้ตอน mount
-  useEffect(() => {
+  // อ่านขนาด QR ที่ผู้ใช้ปรับไว้ตั้งแต่ต้น (เฉพาะฝั่งเบราว์เซอร์) — ค่านี้
+  // ไม่ได้ถูก render ก่อนโหลด session เสร็จ จึงไม่เกิด hydration mismatch
+  const [qrSize, setQrSize] = useState(() => {
+    if (typeof window === "undefined") return QR_SIZE_DEFAULT;
     const saved = Number(window.localStorage.getItem(QR_SIZE_STORAGE_KEY));
-    if (Number.isFinite(saved) && saved >= QR_SIZE_MIN && saved <= QR_SIZE_MAX) {
-      setQrSize(saved);
-    }
-  }, []);
+    return Number.isFinite(saved) && saved >= QR_SIZE_MIN && saved <= QR_SIZE_MAX
+      ? saved
+      : QR_SIZE_DEFAULT;
+  });
+
+  // Polling/backoff state — refs hold values read inside timers (no re-render
+  // needed) while `pollSeq` re-arms the self-scheduling poll loop.
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [pollBackoffMs, setPollBackoffMs] = useState(0);
+  const [pollSeq, setPollSeq] = useState(0);
+  const pollBackoffIndexRef = useRef(0);
+  const [isVisible, setIsVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
+
+  // QR re-issue guards: a failed issue must not retry every second.
+  const [qrError, setQrError] = useState<string | null>(null);
+  const qrIssuingRef = useRef(false);
+  const qrFailureCountRef = useRef(0);
+  const qrRetryAtRef = useRef(0);
 
   const updateQrSize = (next: number) => {
     const clamped = Math.min(QR_SIZE_MAX, Math.max(QR_SIZE_MIN, next));
     setQrSize(clamped);
     window.localStorage.setItem(QR_SIZE_STORAGE_KEY, String(clamped));
   };
-
-  const ONE_SHOT_REISSUE_MARGIN = 2; // seconds before expiry
 
   const loadSession = useCallback(async () => {
     try {
@@ -89,27 +134,42 @@ function SessionControlContent() {
     }
   }, [sessionId]);
 
-  const loadRoster = useCallback(async () => {
-    try {
-      const [rosterRes, recordRes] = await Promise.all([
-        samsRequest<RosterRow[]>({ url: `/attendance/sessions/${sessionId}/roster/` }),
-        samsRequest<AttendanceRecord[]>({
-          url: "/attendance/records/",
-          params: { attendance_session: sessionId, page_size: 100 },
-        }),
-      ]);
-      setRoster(rosterRes.data ?? []);
-      setRecords(recordRes.data ?? []);
-    } catch (error) {
-      await alertError(
-        "โหลดรายชื่อคาบไม่สำเร็จ",
-        error instanceof ApiError ? error.message : undefined,
-      );
-    }
-  }, [sessionId]);
+  const loadRoster = useCallback(
+    async (silent = false): Promise<{ ok: boolean; status?: number }> => {
+      try {
+        const { data } = await samsRequest<RosterRow[]>({
+          url: `/attendance/sessions/${sessionId}/roster/`,
+        });
+        setRoster(data ?? []);
+        setPollError(null);
+        return { ok: true };
+      } catch (error) {
+        const status = error instanceof ApiError ? error.status : undefined;
+        if (silent) {
+          // Polling failures get an inline banner instead of a modal alert,
+          // so a transient 429 cannot spam the instructor every few seconds.
+          setPollError(
+            status === 429
+              ? "ระบบจำกัดจำนวนคำขอชั่วคราว — กำลังลองใหม่ด้วยความถี่ที่ต่ำลง"
+              : "อัปเดตรายชื่อไม่สำเร็จ — ระบบจะลองใหม่ให้อัตโนมัติ",
+          );
+        } else {
+          await alertError(
+            "โหลดรายชื่อคาบไม่สำเร็จ",
+            error instanceof ApiError ? error.message : undefined,
+          );
+        }
+        return { ok: false, status };
+      }
+    },
+    [sessionId],
+  );
 
   const issueQrToken = useCallback(
     async (silent = false) => {
+      // Single-flight + backoff: a failing re-issue must not fire every second.
+      if (qrIssuingRef.current) return null;
+      qrIssuingRef.current = true;
       try {
         const { data, envelope } = await samsRequest<QRTokenInfo>({
           url: `/attendance/sessions/${sessionId}/qr-token/`,
@@ -119,11 +179,29 @@ function SessionControlContent() {
         setToken(data);
         const remaining = Math.max(1, Number(data.expires_in_seconds ?? 30));
         setSecondsLeft(remaining);
+        qrFailureCountRef.current = 0;
+        qrRetryAtRef.current = 0;
+        setQrError(null);
         if (!silent) {
           void toastSuccess(envelope.message ?? "ออก QR Code สำเร็จ");
         }
         return data;
       } catch (error) {
+        const status = error instanceof ApiError ? error.status : undefined;
+        const attempt = Math.min(
+          qrFailureCountRef.current,
+          QR_REISSUE_BACKOFF_MS.length - 1,
+        );
+        qrRetryAtRef.current = Date.now() + QR_REISSUE_BACKOFF_MS[attempt];
+        qrFailureCountRef.current = Math.min(
+          attempt + 1,
+          QR_REISSUE_BACKOFF_MS.length - 1,
+        );
+        setQrError(
+          status === 429
+            ? "ระบบจำกัดจำนวนคำขอชั่วคราว — QR จะหมุนเวียนใหม่เมื่อทำได้"
+            : "ออก Token ใหม่ไม่สำเร็จ — ระบบจะลองใหม่ให้อัตโนมัติ",
+        );
         if (!silent) {
           await alertError(
             "ออก QR Code ไม่สำเร็จ",
@@ -131,6 +209,8 @@ function SessionControlContent() {
           );
         }
         return null;
+      } finally {
+        qrIssuingRef.current = false;
       }
     },
     [sessionId],
@@ -147,32 +227,73 @@ function SessionControlContent() {
     })();
   }, [loadSession, loadRoster, issueQrToken]);
 
-  // Roster live refresh
+  // Pause polling while the tab is hidden; resume when it becomes visible.
   useEffect(() => {
-    if (!rosterAutoRefresh) return;
-    const interval = setInterval(() => {
-      void loadRoster();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [rosterAutoRefresh, loadRoster]);
+    const onChange = () => setIsVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
 
-  // QR token countdown + auto re-issue shortly before expiry
+  // Adaptive live roster polling. One self-scheduling timeout at a time:
+  // - open + inside check-in window: 5s
+  // - open but outside the window: 25s
+  // - scheduled/paused: 15s
+  // - closed/cancelled, hidden tab, or auto-refresh off: no polling
+  // - 429: 10 → 20 → 40 → 60s backoff before trying again
+  useEffect(() => {
+    if (!rosterAutoRefresh || !session || !isVisible) return;
+    if (session.status === "closed" || session.status === "cancelled") return;
+
+    const delay =
+      pollBackoffMs > 0 ? pollBackoffMs : rosterPollInterval(session);
+    const timer = setTimeout(async () => {
+      const result = await loadRoster(true);
+      if (result.ok) {
+        pollBackoffIndexRef.current = 0;
+        setPollBackoffMs(0);
+      } else if (result.status === 429) {
+        const index = Math.min(
+          pollBackoffIndexRef.current,
+          POLL_RATE_LIMIT_BACKOFF_MS.length - 1,
+        );
+        setPollBackoffMs(POLL_RATE_LIMIT_BACKOFF_MS[index]);
+        pollBackoffIndexRef.current = Math.min(
+          index + 1,
+          POLL_RATE_LIMIT_BACKOFF_MS.length - 1,
+        );
+      } else {
+        setPollBackoffMs(0);
+      }
+      setPollSeq((n) => n + 1);
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [
+    rosterAutoRefresh,
+    session,
+    isVisible,
+    pollBackoffMs,
+    pollSeq,
+    loadRoster,
+  ]);
+
+  // QR token countdown. It deliberately runs slightly past zero while a
+  // re-issue is failing, so the retry effect below keeps ticking.
   useEffect(() => {
     if (!token || !session || session.status !== "open") return;
     const interval = setInterval(() => {
-      setSecondsLeft((prev) => {
-        const next = Math.max(0, prev - 1);
-        if (next <= ONE_SHOT_REISSUE_MARGIN) {
-          // Rotate immediately: each new token invalidates the previous one.
-          void issueQrToken(true);
-          return next;
-        }
-        return next;
-      });
+      setSecondsLeft((prev) => prev - 1);
     }, 1000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, session]);
+
+  // Rotate shortly before expiry, respecting the re-issue backoff.
+  useEffect(() => {
+    if (!token || !session || session.status !== "open") return;
+    if (secondsLeft > ONE_SHOT_REISSUE_MARGIN) return;
+    if (Date.now() < qrRetryAtRef.current) return;
+    void issueQrToken(true);
+  }, [secondsLeft, token, session, issueQrToken]);
 
   const lifecycle = async (action: "open" | "pause" | "close" | "cancel") => {
     const texts: Record<string, string> = {
@@ -196,12 +317,19 @@ function SessionControlContent() {
       });
       setSession(data);
       await toastSuccess(envelope.message);
+      // A manual lifecycle action resets any poll/QR backoff immediately.
+      pollBackoffIndexRef.current = 0;
+      setPollBackoffMs(0);
       if (action === "open") {
         await issueQrToken(true);
       } else {
         setToken(null);
+        setQrError(null);
+        setSecondsLeft(0);
+        qrFailureCountRef.current = 0;
+        qrRetryAtRef.current = 0;
       }
-      await loadRoster();
+      await loadRoster(true);
     } catch (error) {
       await alertError(
         "จัดการคาบไม่สำเร็จ",
@@ -212,15 +340,9 @@ function SessionControlContent() {
     }
   };
 
-  const recordByStudent = useMemo(() => {
-    const map = new Map<string, AttendanceRecord>();
-    for (const r of records) map.set(r.student, r);
-    return map;
-  }, [records]);
-
   const editStatus = async (row: RosterRow, nextStatus: string) => {
-    const record = recordByStudent.get(row.id);
-    if (!record) {
+    if (!nextStatus) return;
+    if (!row.record_id) {
       await alertError(
         "นักศึกษายังไม่มีรายการเช็คชื่อในคาบนี้ เช็คชื่อ (หรือรอปิดคาบสร้างรายการขาดเรียน) ก่อนจึงจะแก้ไขสถานะได้",
       );
@@ -230,7 +352,7 @@ function SessionControlContent() {
     if (!reason) return;
     try {
       await samsRequest({
-        url: `/attendance/records/${record.id}/`,
+        url: `/attendance/records/${row.record_id}/`,
         method: "PATCH",
         data: { status: nextStatus, edit_reason: reason },
       });
@@ -249,6 +371,16 @@ function SessionControlContent() {
     if (statusFilter === "not_checked_in") return roster.filter((r) => r.checked_in_status === null);
     return roster.filter((r) => r.checked_in_status === statusFilter);
   }, [roster, statusFilter]);
+
+  // นับจาก roster ที่เพิ่งโหลด เพื่อให้ตัวเลขอัปเดตตามการ poll โดยไม่ต้อง
+  // โหลด session ซ้ำ (ระหว่างที่ roster ยังว่างให้ใช้ค่าจาก session)
+  const checkedInCount = useMemo(
+    () =>
+      roster.length > 0
+        ? roster.filter((r) => r.checked_in_status !== null).length
+        : session?.checked_in_count ?? 0,
+    [roster, session],
+  );
 
   if (loading || !session) {
     return (
@@ -311,8 +443,26 @@ function SessionControlContent() {
                           />
                         </div>
                         <div className="text-center text-xs text-slate-500">
-                          หมดอายุในอีก <strong className="tabular-nums text-slate-800">{secondsLeft}s</strong> · ระบบจะหมุนเวียน token ใหม่เอง
+                          {Math.max(0, secondsLeft) > 0 ? (
+                            <>
+                              หมดอายุในอีก{" "}
+                              <strong className="tabular-nums text-slate-800">
+                                {Math.max(0, secondsLeft)}s
+                              </strong>{" "}
+                              · ระบบจะหมุนเวียน token ใหม่เอง
+                            </>
+                          ) : (
+                            <>Token หมดอายุแล้ว — กำลังออก token ใหม่…</>
+                          )}
                         </div>
+                        {qrError && (
+                          <p
+                            role="status"
+                            className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs text-amber-800"
+                          >
+                            {qrError}
+                          </p>
+                        )}
                         <div className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2">
                           <div className="flex items-center justify-between text-xs text-slate-600">
                             <label htmlFor="qr-size" className="font-medium">
@@ -444,7 +594,7 @@ function SessionControlContent() {
                 )}
               </div>
               <div className="mt-3 text-xs text-slate-500 tabular-nums">
-                ลงทะเบียน {session.enrolled_count} คน · เช็คชื่อแล้ว {session.checked_in_count} คน
+                ลงทะเบียน {session.enrolled_count} คน · เช็คชื่อแล้ว {checkedInCount} คน
               </div>
             </div>
           </div>
@@ -471,12 +621,26 @@ function SessionControlContent() {
                   <input
                     type="checkbox"
                     checked={rosterAutoRefresh}
-                    onChange={(e) => setRosterAutoRefresh(e.target.checked)}
+                    onChange={(e) => {
+                      setRosterAutoRefresh(e.target.checked);
+                      if (e.target.checked) {
+                        pollBackoffIndexRef.current = 0;
+                        setPollBackoffMs(0);
+                      }
+                    }}
                     className="h-4 w-4 rounded border-slate-300"
                   />
-                  รีเฟรชอัตโนมัติทุก 5 วินาที
+                  รีเฟรชอัตโนมัติ
                 </label>
               </div>
+              {pollError && (
+                <div
+                  role="status"
+                  className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                >
+                  {pollError}
+                </div>
+              )}
               <DataTable<RosterRow>
                 columns={[
                   { key: "student_code", label: "รหัสนักศึกษา" },
@@ -503,7 +667,7 @@ function SessionControlContent() {
                 renderActions={(row) => (
                   <select
                     aria-label="แก้ไขสถานะรายคน"
-                    value={recordByStudent.get(row.id)?.status ?? ""}
+                    value={row.checked_in_status ?? ""}
                     onChange={(e) => void editStatus(row, e.target.value)}
                     className="rounded-lg border border-slate-300 px-2 py-1 text-xs"
                   >

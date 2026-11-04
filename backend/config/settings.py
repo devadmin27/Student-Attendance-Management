@@ -233,6 +233,11 @@ REST_FRAMEWORK = {
         "login": "10/min",
         "checkin": "20/min",
         "csv_import": "5/hour",
+        # Roster polling (5s interval ≈ 720/h in-window; headroom for
+        # longer sessions and manual refreshes). Separate from the global
+        # `user` budget so polling cannot starve the rest of the UI.
+        "attendance_poll": "1800/hour",
+        "attendance_poll_burst": "60/min",
     },
     "EXCEPTION_HANDLER": "common.exceptions.sams_exception_handler",
     "DEFAULT_RENDERER_CLASSES": ("common.renderers.SamsJSONRenderer",),

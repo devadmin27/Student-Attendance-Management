@@ -17,7 +17,11 @@ from rest_framework.response import Response
 
 from apps.accounts.models import StudentProfile
 from apps.audit.models import log_audit
-from apps.audit.throttles import CheckInThrottle
+from apps.audit.throttles import (
+    AttendancePollBurstThrottle,
+    AttendancePollThrottle,
+    CheckInThrottle,
+)
 from apps.attendance import services
 from apps.attendance.models import AttendanceRecord, AttendanceSession
 from apps.attendance.serializers import (
@@ -89,6 +93,13 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
                 "course_offering__academic_term", "instructor", "class_schedule",
             )
         )
+
+    def get_throttles(self):
+        """Roster polling gets its own scoped budget instead of the global
+        `user` bucket, so live refresh does not starve other API calls."""
+        if self.action == "roster":
+            return [AttendancePollThrottle(), AttendancePollBurstThrottle()]
+        return super().get_throttles()
 
     def create(self, request, *args, **kwargs):
         """Only the offering's instructor (or admin) may create a session."""
@@ -181,6 +192,7 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
         data["qr"] = token.raw  # returned once to display; never stored nor logged
         return success_response(data, "ออก QR Code สำเร็จ")
 
+    @extend_schema(responses=SessionRosterSerializer(many=True))
     @action(detail=True, methods=["get"], url_path="roster")
     def roster(self, request, pk=None):
         session = self.get_object()
@@ -200,9 +212,15 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
                 "student_name": f"{s.first_name} {s.last_name}",
                 "checked_in_status": rec.status if rec else None,
                 "checked_in_at": rec.checked_in_at if rec else None,
+                # The frontend edits status by record PK; returning it here
+                # avoids an extra /attendance/records/ request on every poll.
+                "record_id": str(rec.id) if rec else None,
             })
         rows.sort(key=lambda r: r["student_code"])
-        return success_response(rows, "โหลดรายชื่อคาบเรียนสำเร็จ")
+        return success_response(
+            SessionRosterSerializer(rows, many=True).data,
+            "โหลดรายชื่อคาบเรียนสำเร็จ",
+        )
 
 
 class AttendanceRecordViewSet(viewsets.ModelViewSet):

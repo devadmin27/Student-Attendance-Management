@@ -72,10 +72,23 @@ class AttendanceSession(models.Model):
     def checked_in_count(self) -> int:
         return self.records.count()
 
+    @property
+    def check_in_effective_end(self):
+        """เวลาสิ้นสุดการรับเช็คชื่อจริง = check_in_end + late_threshold + grace.
+
+        ใช้เป็นแหล่งความจริงเดียวให้ frontend (ไม่ต้องคำนวณซ้ำ) และให้
+        is_checkin_open_at ใช้ตัดสินหน้าต่างเวลา.
+        """
+        if not self.check_in_end:
+            return None
+        return self.check_in_end + timezone.timedelta(
+            minutes=int(self.late_threshold_minutes or 0)
+        ) + timezone.timedelta(seconds=dj_settings.CHECKIN_GRACE_SECONDS)
+
     def is_checkin_open_at(self, now=None) -> bool:
         """สภาพ session ที่ยังรับเช็คชื่อได้: open + อยู่ในหน้าต่างเวลา.
 
-        หน้าต่าง = [check_in_start, check_in_end + late_threshold + grace]
+        หน้าต่าง = [check_in_start, check_in_effective_end]
         เช็คก่อน check_in_end = present, หลัง = late, หลังหน้าต่าง = ปิด.
         """
         now = now or timezone.now()
@@ -83,12 +96,7 @@ class AttendanceSession(models.Model):
             return False
         if self.check_in_start and now < self.check_in_start:
             return False
-        latest = None
-        if self.check_in_end:
-            latest = self.check_in_end + timezone.timedelta(
-                minutes=int(self.late_threshold_minutes or 0)
-            )
-            latest = latest + timezone.timedelta(seconds=dj_settings.CHECKIN_GRACE_SECONDS)
+        latest = self.check_in_effective_end
         return latest is None or now <= latest
 
     def __str__(self):

@@ -1,14 +1,21 @@
 ﻿"""QR attendance core tests: tokens, check-in integrity, session lifecycle."""
 import threading
 from datetime import timedelta
+from unittest.mock import patch
 
+from django.test import override_settings
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 
 from apps.accounts.models import User
 from apps.accounts.tests import BaseSamsTest
 from apps.attendance import services
 from apps.attendance.models import AttendanceRecord, AttendanceSession, QRToken
+from apps.audit.throttles import (
+    AttendancePollBurstThrottle,
+    AttendancePollThrottle,
+)
 
 
 class SessionAndTokenTests(BaseSamsTest):
@@ -392,3 +399,98 @@ class SessionCloseTests(BaseSamsTest):
         self.assertEqual(response.status_code, 200)
         self.session.refresh_from_db()
         self.assertEqual(self.session.status, "closed")
+
+
+class RosterPollingTests(BaseSamsTest):
+    """Roster endpoint feeds the live polling UI — it must be the single
+    source of check-in state and use its own throttle budget."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = timezone.now()
+        self.session = AttendanceSession.objects.create(
+            course_offering=self.offering,
+            instructor=self.instructor,
+            session_date=timezone.localdate(),
+            check_in_start=self.now - timedelta(minutes=15),
+            check_in_end=self.now + timedelta(minutes=15),
+            late_threshold_minutes=15,
+            status="open",
+        )
+        self.roster_url = f"/api/v1/attendance/sessions/{self.session.pk}/roster/"
+        self.detail_url = f"/api/v1/attendance/sessions/{self.session.pk}/"
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+
+    def test_effective_end_is_late_threshold_plus_grace(self):
+        self.assertEqual(
+            self.session.check_in_effective_end,
+            self.session.check_in_end + timedelta(minutes=15),
+        )
+        detail = self.client.get(self.detail_url)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(
+            parse_datetime(detail.json()["data"]["check_in_effective_end"]),
+            self.session.check_in_effective_end,
+        )
+
+    @override_settings(CHECKIN_GRACE_SECONDS=30)
+    def test_effective_end_includes_grace_setting(self):
+        self.assertEqual(
+            self.session.check_in_effective_end,
+            self.session.check_in_end + timedelta(minutes=15, seconds=30),
+        )
+
+    def test_roster_returns_record_id_for_checked_in_student(self):
+        raw = services.issue_token(self.session, self.instructor_user).raw
+        services.check_in(self.student_user, raw)
+        record = AttendanceRecord.objects.get(attendance_session=self.session)
+
+        response = self.client.get(self.roster_url)
+        self.assertEqual(response.status_code, 200)
+        row = next(
+            r for r in response.data["data"]
+            if r["student_code"] == self.student.student_code
+        )
+        self.assertEqual(row["record_id"], str(record.pk))
+        self.assertEqual(row["checked_in_status"], "present")
+
+    def test_roster_record_id_is_null_before_check_in(self):
+        response = self.client.get(self.roster_url)
+        self.assertEqual(response.status_code, 200)
+        row = next(
+            r for r in response.data["data"]
+            if r["student_code"] == self.student.student_code
+        )
+        self.assertIsNone(row["record_id"])
+        self.assertIsNone(row["checked_in_status"])
+
+    def test_roster_uses_scoped_throttle_not_global_user_bucket(self):
+        rates = {
+            "attendance_poll": "1/hour",
+            "attendance_poll_burst": "60/min",
+            "user": "1/hour",
+        }
+        with patch.dict(AttendancePollThrottle.THROTTLE_RATES, rates, clear=False):
+            first = self.client.get(self.roster_url)
+            self.assertEqual(first.status_code, 200)
+            second = self.client.get(self.roster_url)
+            self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+            # The roster throttle is scoped; other endpoints still use the
+            # global bucket (which has not been consumed by roster polling).
+            detail = self.client.get(self.detail_url)
+            self.assertEqual(detail.status_code, 200)
+
+    def test_roster_burst_guard_is_enforced(self):
+        rates = {
+            "attendance_poll": "1800/hour",
+            "attendance_poll_burst": "1/min",
+        }
+        with patch.dict(
+            AttendancePollBurstThrottle.THROTTLE_RATES, rates, clear=False
+        ):
+            self.assertEqual(self.client.get(self.roster_url).status_code, 200)
+            self.assertEqual(
+                self.client.get(self.roster_url).status_code,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )

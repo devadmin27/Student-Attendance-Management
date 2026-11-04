@@ -141,6 +141,7 @@ export interface AttendanceSession {
   session_date: string;
   check_in_start: string;
   check_in_end: string;
+  check_in_effective_end: string | null;
   late_threshold_minutes: number;
   status: "scheduled" | "open" | "paused" | "closed" | "cancelled";
   status_display: string;
@@ -166,6 +167,7 @@ export interface RosterRow {
   student_name: string;
   checked_in_status: AttendanceStatus | null;
   checked_in_at: string | null;
+  record_id: string | null;
 }
 
 export interface AttendanceRecord {

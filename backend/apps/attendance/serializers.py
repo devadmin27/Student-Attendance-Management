@@ -16,13 +16,14 @@ class AttendanceSessionSerializer(serializers.ModelSerializer):
     enrolled_count = serializers.SerializerMethodField()
     checked_in_count = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    check_in_effective_end = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = AttendanceSession
         fields = [
             "id", "course_offering", "course_code", "course_name", "term_label",
             "class_schedule", "instructor", "instructor_name",
-            "session_date", "check_in_start", "check_in_end",
+            "session_date", "check_in_start", "check_in_end", "check_in_effective_end",
             "late_threshold_minutes", "status", "status_display",
             "enrolled_count", "checked_in_count",
             "created_at", "updated_at", "closed_at",
@@ -180,3 +181,4 @@ class SessionRosterSerializer(serializers.Serializer):
     student_name = serializers.CharField(read_only=True)
     checked_in_status = serializers.CharField(read_only=True, allow_null=True)
     checked_in_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    record_id = serializers.CharField(read_only=True, allow_null=True)
