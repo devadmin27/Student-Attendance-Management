@@ -156,3 +156,51 @@
 
 - มี **ช่วงเวลา** ที่ request รำวรายสลับ 503 "no available server" (Cloudflare) และ 401 `NOT_AUTHENTICATED` แบบไม่อธิบายได้ด้วย app-token — หายเองในหลายนาที. สันนิษฐานว่ามี **แหล่ง backend มากกว่า 1 ตัว** หรือ origin ดับเป็นช่วง; ถ้าเจออาการถี่ ให้เช็ค Coolify (container ตัวเดียว) และ Cloudflare Load Balancing/DNS
 
+## 10. Polling แบบ hybrid + scoped rate limit — ตรวจบน production จริง (2026-11-04)
+
+Deploy commit `b65d9a3` (ต่อจาก `85b273f`) แล้วตรวจกับ `https://sams.scphtrang.ac.th` ด้วย UA `sams-probe/1.0` และบัญชีทดสอบอาจารย์ `teach2`
+
+### ยืนยันว่าโค้ดใหม่ขึ้น production
+
+| หลักฐาน | ผล |
+|---|---|
+| `GET /api/v1/health/` | 200 `database: "connected"` |
+| `GET /api/v1/schema/` | พบ `AttendanceSession.check_in_effective_end` (readOnly, date-time) และ `SessionRoster.record_id` (readOnly, nullable) |
+| JS chunk ของหน้า control room (`/_next/static/chunks/3w9-3osg96rd1.js`) | พบ `check_in_effective_end`, `record_id`, `visibilitychange`, ค่า interval 5000/25000/15000 และโค้ดจัดการ 429 |
+
+### ผลทดสอบ API (คาบจริงบน production)
+
+- `check_in_effective_end` ของคาบที่สร้างจริง = `check_in_end + 900 วินาที` (late 15 นาที, grace ของ production = 0) เช่น `20:43:51 → 20:58:51`
+- roster คืน `record_id` ตรงกับ PK ของ record จริง (`2fc3a346-…`)
+- PATCH `/attendance/records/{record_id}/` สำเร็จ 200 → roster รอบถัดไปแสดง `late`
+- ระหว่าง poll ไม่มี `GET /attendance/records/` เลย (0 ครั้งตลอดการทดสอบ)
+
+### ผลทดสอบ frontend บน production (Playwright 1366×900)
+
+| สถานการณ์ | ผลที่วัดได้ |
+|---|---|
+| open + อยู่ในหน้าต่าง (17 วิ) | request roster ที่ 0 / 5.2 / 10.4 วิ → cadence ~5 วิ |
+| open + อยู่นอกหน้าต่าง (70 วิ) | 0 / 25.0 / 50.5 วิ → cadence ~25 วิ |
+| paused (วัดหลังกดหยุด 2.5 วิ นาน 18 วิ) | 1 ครั้งที่ 15.0 วิ → cadence 15 วิ |
+| tab hidden 8 วิ | 0 request |
+| กลับมา visible | ยิงทันที 1 ครั้ง แล้วกลับเข้า cadence ปกติ |
+| closed (9 วิ) | 0 request |
+| บังคับ 429 ที่ browser (intercept เฉพาะ roster) | banner "ระบบจำกัดจำนวนคำขอชั่วคราว…" ขึ้น, ยิงซ้ำหลัง ~10 วิ, banner หายเองหลัง poll สำเร็จ |
+
+### Rate limit จริงที่ backend
+
+- ยิง roster 240 ครั้งใน 36.3 วิ → `200: 160`, `429: 80`
+- 429 มี header `retry-after` และ body `{"code":"THROTTLED","data":{"wait_seconds":…}}`
+- ขณะ roster ติด 429: `GET /attendance/sessions/` และ `GET /attendance/records/` ยัง 200 → ยืนยันว่า polling ใช้ bucket แยก ไม่กิน global `user` (600/hour)
+
+**ข้อจำกัดที่พบ (ยังไม่แก้รอบนี้):** production ยังไม่มี `CACHES` ที่ใช้ร่วมกัน ทำให้ DRF throttle นับใน LocMem ของแต่ละ gunicorn worker (3 workers) — ค่า `60/min` จึงมีผลระดับ worker ไม่ใช่ทั้งระบบ (observed ~160 คำขอก่อนเริ่ม 429) แผน Phase 3 คือ Redis; ระหว่างนี้ 1800/hour + 60/min ยังกันการยิงถี่ผิดปกติได้ในระดับ worker และ frontend backoff 10→20→40→60 วิ ช่วยลดภาระจริง
+
+### เก็บกวาดข้อมูลทดสอบ
+
+ลบคาบทดสอบ 3 คาบ (session + record + QR token 16 รายการ) และ enrollment ชั่วคราว 1 แถวออกจาก production แล้ว — `teach2` กลับมามี 0 คาบเหมือนก่อนทดสอบ; audit log ของการทดสอบยังอยู่ตามข้อจำกัด append-only ของระบบ
+
+### ข้อสังเกตอื่น
+
+- เจอ Cloudflare `520` 1 ครั้งจากการยิง concurrent 80 คำขอ — หลังลด concurrency ไม่เกิดซ้ำ
+- พบ 401 จาก `/api/v1/auth/refresh/` 2 ครั้งระหว่างเปิดหน้า (refresh token เก่า/ถูก rotate) แต่หน้าโหลดต่อได้ปกติ — เป็น race เดิม ไม่ใช่ผลจากงานนี้
+
