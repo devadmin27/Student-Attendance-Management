@@ -6,8 +6,8 @@ import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { confirmDialog, toastSuccess } from "@/lib/swal";
 import DataTable, { PaginationControls } from "@/components/DataTable";
-import { useEffect, useState } from "react";
-import type { InstructorProfile } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import type { InstructorProfile, Program } from "@/lib/types";
 import { alertError } from "@/lib/swal";
 
 const inputClass =
@@ -20,8 +20,25 @@ const createFormFields = [
   { name: "employee_code", label: "รหัสพนักงาน", required: true },
   { name: "first_name", label: "ชื่อ", required: true },
   { name: "last_name", label: "นามสกุล", required: true },
-  { name: "department", label: "ภาควิชา/สาขา", required: false },
+  { name: "department", label: "หลักสูตร/สาขา", type: "select", required: false },
 ] as const;
+
+/** All programs (option source for the หลักสูตร/สาขา dropdown). */
+async function loadPrograms(): Promise<Program[]> {
+  const rows: Program[] = [];
+  for (let page = 1; ; ) {
+    const { data, envelope } = await samsRequest<{ results?: Program[] }>({
+      url: "/programs/",
+      params: { page, page_size: 100 },
+    });
+    const pageRows = data.results ?? (Array.isArray(data) ? data : []);
+    rows.push(...pageRows);
+    const pages = envelope.pagination?.pages ?? 1;
+    if (pages > page && pageRows.length > 0) page += 1;
+    else break;
+  }
+  return rows;
+}
 
 export default function AdminInstructorsPage() {
   const user = useRequireRole(["admin"]);
@@ -36,6 +53,22 @@ export default function AdminInstructorsPage() {
   const [editing, setEditing] = useState<InstructorProfile | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [programs, setPrograms] = useState<Program[]>([]);
+
+  const departmentOptions = useMemo(() => {
+    const opts = programs.map((p) => ({
+      id: p.id,
+      value: p.program_name,
+      label: `${p.program_code} · ${p.program_name}`,
+    }));
+    // Keep a legacy free-text value selectable while editing, so saving an
+    // unrelated field never silently erases it.
+    const legacy = editing?.department?.trim();
+    if (legacy && !opts.some((o) => o.value === legacy)) {
+      opts.unshift({ id: "legacy", value: legacy, label: `${legacy} (ค่าเดิม)` });
+    }
+    return opts;
+  }, [programs, editing]);
 
   const refresh = async () => {
     setLoading(true);
@@ -66,6 +99,21 @@ export default function AdminInstructorsPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await loadPrograms();
+        if (!cancelled) setPrograms(rows);
+      } catch {
+        if (!cancelled) setPrograms([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
@@ -182,7 +230,7 @@ export default function AdminInstructorsPage() {
             { key: "name", label: "ชื่อ-นามสกุล", render: (r) => `${r.first_name} ${r.last_name}` },
             { key: "username", label: "ชื่อผู้ใช้" },
             { key: "email", label: "อีเมล" },
-            { key: "department", label: "ภาควิชา", render: (r) => r.department || "-" },
+            { key: "department", label: "หลักสูตร/สาขา", render: (r) => r.department || "-" },
             { key: "status", label: "สถานะ", render: (r) => <StatusBadge status={r.status} /> },
           ]}
           rows={rows}
@@ -244,6 +292,20 @@ export default function AdminInstructorsPage() {
                         className={`${inputClass} bg-slate-100 text-slate-500`}
                       />
                     ) : null
+                  ) : f.name === "department" ? (
+                    <select
+                      id={`instr-${f.name}`}
+                      value={form[f.name] ?? ""}
+                      onChange={(e) => setForm((p) => ({ ...p, [f.name]: e.target.value }))}
+                      className={`${inputClass} bg-white`}
+                    >
+                      <option value="">— ไม่ระบุ —</option>
+                      {departmentOptions.map((o) => (
+                        <option key={o.id} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
                     <input
                       id={`instr-${f.name}`}

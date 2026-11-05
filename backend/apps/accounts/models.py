@@ -145,7 +145,7 @@ class InstructorProfile(models.Model):
     employee_code = models.CharField("รหัสพนักงาน", max_length=32, unique=True)
     first_name = models.CharField("ชื่อ", max_length=100)
     last_name = models.CharField("นามสกุล", max_length=100)
-    department = models.CharField("ภาควิชา/สาขา", max_length=150, blank=True, default="")
+    department = models.CharField("หลักสูตร/สาขา", max_length=200, blank=True, default="")
     status = models.CharField(
         "สถานะ", max_length=16, choices=PROFILE_STATUS_CHOICES, default="active"
     )
