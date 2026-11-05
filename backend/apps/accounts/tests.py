@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.accounts.models import StudentProfile, User
+from apps.accounts.models import InstructorProfile, StudentProfile, User
 from apps.academics.models import AcademicTerm, ClassGroup, Program
 from apps.courses.models import Course, CourseOffering, Enrollment
 from apps.attendance.models import AttendanceRecord, AttendanceSession
@@ -239,6 +239,46 @@ class RBACTests(BaseSamsTest):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], "VALIDATION_ERROR")
         self.assertFalse(User.objects.filter(username="weakguy").exists())
+
+
+class InstructorDeleteTests(BaseSamsTest):
+    """Deleting an instructor must also remove the login account."""
+
+    def test_delete_unreferenced_instructor_removes_user(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        user = User.objects.create_user(
+            "temp_instructor", "temp@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        profile = user.instructor_profile
+        profile.employee_code = "TEMP-DEL"
+        profile.save()
+
+        response = self.client.delete(f"/api/v1/instructors/{profile.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(User.objects.filter(pk=user.pk).exists())
+        self.assertFalse(InstructorProfile.objects.filter(employee_code="TEMP-DEL").exists())
+
+    def test_delete_referenced_instructor_deactivates_instead(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        # cls.instructor owns a course offering and its attendance session
+        # references them through PROTECT relations.
+        response = self.client.delete(f"/api/v1/instructors/{self.instructor.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("ระงับบัญชีแทนการลบ", response.data["message"])
+        self.instructor_user.refresh_from_db()
+        self.instructor.refresh_from_db()
+        self.assertFalse(self.instructor_user.is_active)
+        self.assertEqual(self.instructor.status, "inactive")
+        self.assertTrue(CourseOffering.objects.filter(pk=self.offering.pk).exists())
+
+    def test_instructor_cannot_delete_accounts(self):
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        response = self.client.delete(f"/api/v1/instructors/{self.instructor.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(User.objects.filter(pk=self.instructor_user.pk).exists())
 
 
 class DashboardTests(BaseSamsTest):

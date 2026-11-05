@@ -174,14 +174,19 @@ export default function AdminInstructorsPage() {
 
   const doDelete = async (row: InstructorProfile) => {
     const confirmed = await confirmDialog({
-      title: "ยืนยันการลบข้อมูลอาจารย์",
-      text: `${row.first_name} ${row.last_name} (${row.employee_code})`,
-      confirmText: "ลบ",
+      title: "ยืนยันการลบอาจารย์และบัญชีผู้ใช้",
+      text: `${row.first_name} ${row.last_name} (${row.employee_code}) — ระบบจะลบบัญชีผู้ใช้ "${row.username}" ไปพร้อมกัน`,
+      confirmText: "ลบทั้งอาจารย์และบัญชี",
     });
     if (!confirmed) return;
     try {
-      await samsRequest({ url: `/instructors/${row.id}/`, method: "DELETE" });
-      await toastSuccess("ลบข้อมูลอาจารย์สำเร็จ");
+      const { envelope } = await samsRequest({
+        url: `/instructors/${row.id}/`,
+        method: "DELETE",
+      });
+      // Hard delete returns 204 (no envelope); a PROTECT fallback returns the
+      // server's explanation that the account was only deactivated.
+      await toastSuccess(envelope.message || "ลบข้อมูลอาจารย์และบัญชีผู้ใช้สำเร็จ");
       await refresh();
     } catch (error) {
       await alertError("ลบไม่สำเร็จ", error instanceof ApiError ? error.message : undefined);

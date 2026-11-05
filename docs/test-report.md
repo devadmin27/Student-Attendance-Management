@@ -204,3 +204,28 @@ Deploy commit `b65d9a3` (ต่อจาก `85b273f`) แล้วตรวจ�
 - เจอ Cloudflare `520` 1 ครั้งจากการยิง concurrent 80 คำขอ — หลังลด concurrency ไม่เกิดซ้ำ
 - พบ 401 จาก `/api/v1/auth/refresh/` 2 ครั้งระหว่างเปิดหน้า (refresh token เก่า/ถูก rotate) แต่หน้าโหลดต่อได้ปกติ — เป็น race เดิม ไม่ใช่ผลจากงานนี้
 
+## 11. Instructors: หลักสูตร/สาขา dropdown + ลบพร้อมบัญชีผู้ใช้ (2026-11-05)
+
+### หลักสูตร/สาขาเป็น dropdown (commit `9549cc3`)
+
+- Playwright local (1366×900): `#instr-department` แสดง `— ไม่ระบุ —`, `CS-2569 · วิทยาการคอมพิวเตอร์ (ปริญญาตรี)`, `SAN · สาธารณสุข` และ **ไม่มี** `required`
+- สร้างอาจารย์ด้วยตัวเลือก CS-2569 → แถวใหม่แสดง `วิทยาการคอมพิวเตอร์ (ปริญญาตรี)` ถูกต้อง
+- แก้ไขอาจารย์เดิมที่มีค่าแบบข้อความอิสระ (T0001 "ภาควิชาวิทยาการคอมพิวเตอร์") → ตัวเลือก "(ค่าเดิม)" ถูกเลือกและค่ายังอยู่หลังบันทึก
+- `tsc --noEmit`, `eslint`, `npm run build` ผ่าน; backend 73/73
+- ลบรายการ/บัญชีทดสอบออกจาก DB local แล้ว
+
+### การลบอาจารย์ลบบัญชีผู้ใช้ไปด้วย
+
+`DELETE /api/v1/instructors/{id}/` ลบ `User` (และ `InstructorProfile` แบบ CASCADE) ภายใน `transaction.atomic()`; ถ้าโดน `PROTECT` (คาบเช็คชื่อ / รายวิชาที่เปิดสอน / audit log) จะระงับบัญชีแทน
+
+| กรณี | ผลทดสอบจริง |
+|---|---|
+| อาจารย์ใหม่ไม่มี references (backend test) | ✅ 204, `User` และ `InstructorProfile` หายจาก DB |
+| อาจารย์ที่มี course offering (backend test) | ✅ 200 ข้อความ "บัญชีอาจารย์ถูกอ้างอิงโดยประวัติการใช้งาน — ระงับบัญชีแทนการลบ", `is_active=False`, profile status `inactive`, offering ยังอยู่ |
+| instructor เรียก DELETE เอง | ✅ 403 |
+| Playwright: สร้างผ่าน UI แล้วลบ | ✅ dialog ระบุ `ระบบจะลบบัญชีผู้ใช้ "probe_del_ui" ไปพร้อมกัน`, ปุ่ม "ลบทั้งอาจารย์และบัญชี", toast "ลบข้อมูลอาจารย์และบัญชีผู้ใช้สำเร็จ", แถวหาย และตรวจ DB แล้วทั้ง user/profile = 0 |
+| Playwright: ลบอาจารย์ที่มี offering | ✅ toast แสดงข้อความระงับบัญชีแทน, แถวยังอยู่สถานะ "ไม่ใช้งาน", DB: `is_active=False` + profile `inactive` |
+| Backend suite | ✅ 76/76 (เพิ่ม 3 tests ใน `InstructorDeleteTests`) |
+
+ข้อมูลทดสอบ local (`DELUI01`, `SOFTUI`) ถูกลบออกจาก DB หลังทดสอบแล้ว
+

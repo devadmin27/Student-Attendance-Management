@@ -362,3 +362,36 @@ class InstructorProfileViewSet(viewsets.ModelViewSet):
         return success_response(
             InstructorProfileSerializer(instance).data, "เพิ่มอาจารย์สำเร็จ", 201
         )
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete the instructor row together with their login account.
+
+        The profile is a OneToOne CASCADE of the user, so removing the account
+        removes the instructor too. Accounts still referenced by PROTECT
+        relations (attendance sessions, course offerings, append-only audit
+        logs) cannot be removed without losing history — those are deactivated
+        instead, matching ``UserViewSet.destroy``.
+        """
+        instructor = self.get_object()
+        user = instructor.user
+        if getattr(request.user, "pk", None) == user.pk:
+            return Response(
+                {"success": False, "message": "ไม่สามารถลบบัญชีของตนเองได้", "code": "FORBIDDEN"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user_pk = user.pk
+        try:
+            with transaction.atomic():
+                user.delete()
+        except ProtectedError:
+            user.is_active = False
+            user.save(update_fields=["is_active", "updated_at"])
+            instructor.status = "inactive"
+            instructor.save(update_fields=["status", "updated_at"])
+            log_audit(request.user, "user_deactivate", "user", user_pk, request=request)
+            return success_response(
+                {"id": str(user_pk), "is_active": False, "instructor_status": "inactive"},
+                "บัญชีอาจารย์ถูกอ้างอิงโดยประวัติการใช้งาน — ระงับบัญชีแทนการลบ",
+            )
+        log_audit(request.user, "user_delete", "user", user_pk, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
