@@ -1,7 +1,8 @@
 """Courses, offerings, enrollments — admin manage; instructors manage their own."""
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, F, Q
+from uuid import UUID
 from rest_framework import status, viewsets
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
@@ -124,7 +125,26 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
     ordering = ["-enrolled_at"]
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().annotate(
+            attendance_record_count=Count(
+                "student__attendance_records",
+                filter=Q(
+                    student__attendance_records__attendance_session__course_offering_id=F(
+                        "course_offering_id"
+                    )
+                ),
+                distinct=True,
+            )
+        )
+        # Optional term filter for finding past-term enrollments (e.g. a course
+        # that has already finished) — FK filter params go through UUID casts.
+        term_id = self.request.query_params.get("academic_term")
+        if term_id:
+            try:
+                UUID(str(term_id))
+            except (TypeError, ValueError):
+                return qs.none()
+            qs = qs.filter(course_offering__academic_term_id=term_id)
         user = self.request.user
         if user.role == "instructor":
             profile = getattr(user, "instructor_profile", None)
@@ -155,9 +175,118 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         instance = serializer.save()
         log_audit(self.request.user, "enrollment_update", "enrollment", instance.pk, request=self.request)
 
-    def perform_destroy(self, instance):
+    def _record_count(self, instance):
+        """Attendance history for this student within this offering."""
+        return instance.student.attendance_records.filter(
+            attendance_session__course_offering_id=instance.course_offering_id
+        ).count()
+
+    def _enrollment_meta(self, instance):
+        return {
+            "student_code": instance.student.student_code,
+            "course_code": instance.course_offering.course.course_code,
+            "offering_id": str(instance.course_offering_id),
+        }
+
+    def destroy(self, request, *args, **kwargs):
+        """Hard-delete only when the student has no attendance history.
+
+        Enrollment rows can be deleted independently of attendance records
+        (there is no FK), so deleting a used enrollment would silently detach
+        the student's check-in history. Withdrawing keeps the row/status and is
+        the correct operation once a course has started.
+        """
+        instance = self.get_object()
         self._own_offering_or_403(instance.course_offering)
-        super().perform_destroy(instance)
+        record_count = self._record_count(instance)
+        if record_count:
+            return error_response(
+                f"นักศึกษามีประวัติเช็คชื่อ {record_count} ครั้งในรายวิชานี้ — "
+                "ใช้ \"ถอนการลงทะเบียน\" เพื่อเก็บประวัติแทนการลบ",
+                "HAS_ATTENDANCE",
+                status.HTTP_409_CONFLICT,
+            )
+        resource_id = instance.pk
+        metadata = self._enrollment_meta(instance)
+        super().destroy(request, *args, **kwargs)
+        log_audit(
+            request.user, "enrollment_delete", "enrollment", resource_id,
+            metadata=metadata, request=request,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["post"], url_path="withdraw")
+    def withdraw(self, request, pk=None):
+        """Withdraw (ถอน) — keep the row and all attendance history."""
+        instance = self.get_object()
+        self._own_offering_or_403(instance.course_offering)
+        if instance.enrollment_status == "dropped":
+            return success_response(
+                EnrollmentSerializer(instance).data, "รายการนี้ถูกถอนการลงทะเบียนอยู่แล้ว"
+            )
+        if instance.enrollment_status == "completed":
+            return error_response(
+                "รายวิชานี้จบรายวิชาแล้ว — ไม่สามารถถอนการลงทะเบียนได้",
+                "INVALID_STATUS",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        reason = str(request.data.get("reason", "")).strip()[:500]
+        instance.enrollment_status = "dropped"
+        instance.save(update_fields=["enrollment_status", "updated_at"])
+        log_audit(
+            request.user, "enrollment_withdraw", "enrollment", instance.pk,
+            metadata={**self._enrollment_meta(instance), "reason": reason},
+            request=request,
+        )
+        return success_response(
+            EnrollmentSerializer(instance).data,
+            "ถอนการลงทะเบียนสำเร็จ — ประวัติการเช็คชื่อยังอยู่ครบ",
+        )
+
+    @action(detail=True, methods=["post"], url_path="reinstate")
+    def reinstate(self, request, pk=None):
+        """Undo a withdrawal — only while the offering is still running."""
+        instance = self.get_object()
+        self._own_offering_or_403(instance.course_offering)
+        if instance.enrollment_status == "enrolled":
+            return success_response(
+                EnrollmentSerializer(instance).data, "รายการนี้ลงทะเบียนอยู่แล้ว"
+            )
+        if instance.enrollment_status == "completed":
+            return error_response(
+                "รายการนี้จบรายวิชาแล้ว — ไม่สามารถลงทะเบียนใหม่ได้",
+                "INVALID_STATUS",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        if instance.course_offering.status in {"cancelled", "completed"}:
+            return error_response(
+                "รายวิชาที่เปิดสอนนี้ปิดรับลงทะเบียนแล้ว — ไม่สามารถลงทะเบียนใหม่ได้",
+                "OFFERING_CLOSED",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        duplicate = Enrollment.objects.filter(
+            student=instance.student,
+            course_offering__course=instance.course_offering.course,
+            course_offering__academic_term=instance.course_offering.academic_term,
+            enrollment_status="enrolled",
+        ).exclude(pk=instance.pk).exists()
+        if duplicate:
+            return error_response(
+                "นักศึกษาลงทะเบียนรายวิชานี้ในภาคการศึกษาเดียวกันแล้ว",
+                "DUPLICATE",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        reason = str(request.data.get("reason", "")).strip()[:500]
+        instance.enrollment_status = "enrolled"
+        instance.save(update_fields=["enrollment_status", "updated_at"])
+        log_audit(
+            request.user, "enrollment_reinstate", "enrollment", instance.pk,
+            metadata={**self._enrollment_meta(instance), "reason": reason},
+            request=request,
+        )
+        return success_response(
+            EnrollmentSerializer(instance).data, "ลงทะเบียนใหม่สำเร็จ"
+        )
 
     @action(detail=False, methods=["post"], url_path="bulk")
     def bulk_enroll(self, request):
@@ -177,26 +306,40 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         except ValueError:
             return error_response("ไม่พบกลุ่มเรียนที่ระบุ", "ERROR", 400)
         self._own_offering_or_403(offering)
-        if offering.status == "cancelled":
-            return error_response("ไม่สามารถลงทะเบียนรายวิชาที่ถูกยกเลิกได้", "VALIDATION_ERROR", 400)
+        if offering.status in {"cancelled", "completed"}:
+            return error_response(
+                "ไม่สามารถลงทะเบียนรายวิชาที่ปิดรับลงทะเบียนแล้วได้",
+                "OFFERING_CLOSED",
+                400,
+            )
 
         students = StudentProfile.objects.filter(class_group_id=group_id, status="active")
-        created = skipped = 0
+        created = skipped = dropped = 0
         with transaction.atomic():
             for student in students:
-                _, is_new = Enrollment.objects.get_or_create(
+                enrollment, is_new = Enrollment.objects.get_or_create(
                     student=student, course_offering=offering,
                 )
                 if is_new:
                     created += 1
+                elif enrollment.enrollment_status == "dropped":
+                    dropped += 1
                 else:
                     skipped += 1
         log_audit(
             request.user, "enrollment_bulk_create", "enrollment", offering.pk,
-            metadata={"class_group": str(group_id), "created": created, "skipped": skipped},
+            metadata={
+                "class_group": str(group_id), "created": created,
+                "skipped": skipped, "dropped": dropped,
+            },
             request=request,
         )
         return success_response(
-            {"created": created, "skipped": skipped, "course_offering": offering_id},
-            f"ลงทะเบียนเพิ่ม {created} คน (มีอยู่ก่อนแล้วข้าม {skipped} คน)",
+            {
+                "created": created, "skipped": skipped, "dropped": dropped,
+                "course_offering": offering_id,
+            },
+            f"ลงทะเบียนเพิ่ม {created} คน (มีอยู่ก่อนแล้วข้าม {skipped} คน"
+            + (f", ถอนอยู่ {dropped} คน" if dropped else "")
+            + ")",
         )

@@ -6,7 +6,7 @@
  * scopes instructors to the offerings they teach).
  */
 import { useState } from "react";
-import CrudPage, { type FieldDef } from "@/components/CrudPage";
+import { type FieldDef } from "@/components/CrudPage";
 import { StatusBadge } from "@/components/ui";
 import { samsRequest } from "@/lib/api";
 import { alertError, toastSuccess } from "@/lib/swal";
@@ -112,10 +112,18 @@ export const enrollmentColumns = [
   { key: "course_code", label: "รายวิชา" },
   { key: "course_name", label: "ชื่อรายวิชา" },
   { key: "enrollment_status", label: "สถานะ", render: (row: Enrollment) => <StatusBadge status={row.enrollment_status} /> },
+  {
+    key: "attendance_record_count",
+    label: "ประวัติเช็คชื่อ",
+    className: "tabular-nums",
+    render: (row: Enrollment) =>
+      row.attendance_record_count > 0 ? `${row.attendance_record_count} ครั้ง` : "—",
+  },
   { key: "enrolled_at", label: "ลงทะเบียนเมื่อ", render: (row: Enrollment) => formatThaiDateTime(row.enrolled_at) },
 ];
 
 export const enrollmentFilters = [
+  { name: "academic_term", label: "ภาคการศึกษา", optionsKey: "academic-terms" as const },
   { name: "course_offering", label: "รายวิชาที่เปิดสอน", optionsKey: "course-offerings" as const },
   { name: "student", label: "นักศึกษา", optionsKey: "students" as const },
   { name: "enrollment_status", label: "สถานะ", options: ENROLLMENT_STATUS_OPTIONS },
@@ -149,14 +157,17 @@ export function BulkEnrollButton({ refresh }: { refresh: () => void }) {
     }
     setSaving(true);
     try {
-      const { data } = await samsRequest<{ created: number; skipped: number }>({
+      const { data } = await samsRequest<{ created: number; skipped: number; dropped?: number }>({
         url: "/enrollments/bulk/",
         method: "POST",
         data: { course_offering: offering, class_group: group },
       });
       setOpen(false);
+      const dropped = data?.dropped ?? 0;
       await toastSuccess(
-        `ลงทะเบียนเพิ่ม ${data?.created ?? 0} คน (มีอยู่ก่อนแล้วข้าม ${data?.skipped ?? 0} คน)`,
+        `ลงทะเบียนเพิ่ม ${data?.created ?? 0} คน (มีอยู่ก่อนแล้วข้าม ${data?.skipped ?? 0} คน` +
+          (dropped ? `, ถอนอยู่ ${dropped} คน — ใช้ปุ่ม "ลงทะเบียนใหม่"` : "") +
+          ")",
       );
       refresh();
     } catch (error) {

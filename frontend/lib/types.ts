@@ -113,6 +113,7 @@ export interface Enrollment {
   course_name: string;
   enrollment_status: "enrolled" | "dropped" | "completed";
   enrolled_at: string;
+  attendance_record_count: number;
 }
 
 export interface ClassSchedule {

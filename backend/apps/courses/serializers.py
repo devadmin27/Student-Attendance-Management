@@ -126,33 +126,75 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     course_code = serializers.CharField(source="course_offering.course.course_code", read_only=True)
     course_name = serializers.CharField(source="course_offering.course.course_name", read_only=True)
+    attendance_record_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
         fields = [
             "id", "student", "student_code", "student_name",
             "course_offering", "course_code", "course_name",
-            "enrollment_status", "enrolled_at",
+            "enrollment_status", "enrolled_at", "attendance_record_count",
         ]
         read_only_fields = ["id", "enrolled_at"]
 
     def get_student_name(self, obj):
         return f"{obj.student.first_name} {obj.student.last_name}"
 
+    def get_attendance_record_count(self, obj):
+        # The list queryset annotates this; create/update responses fall back
+        # to a single count query so every payload has the same shape.
+        annotated = getattr(obj, "attendance_record_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.student.attendance_records.filter(
+            attendance_session__course_offering_id=obj.course_offering_id
+        ).count()
+
     def validate(self, attrs):
         student = attrs.get("student") or getattr(self.instance, "student", None)
         offering = attrs.get("course_offering") or getattr(self.instance, "course_offering", None)
         if student and offering:
-            if offering.status == "cancelled":
-                raise serializers.ValidationError({"course_offering": "ไม่สามารถลงทะเบียนรายวิชาที่ถูกยกเลิกได้"})
-            if self.instance is None:
+            offering_changed = (
+                self.instance is None or offering.pk != self.instance.course_offering_id
+            )
+            if offering_changed and offering.status in {"cancelled", "completed"}:
+                reason = (
+                    "ถูกยกเลิก" if offering.status == "cancelled" else "จบภาคเรียนแล้ว"
+                )
+                raise serializers.ValidationError(
+                    {"course_offering": f"ไม่สามารถลงทะเบียนรายวิชาที่{reason}ได้"}
+                )
+            if self.instance is not None:
+                student_changed = student.pk != self.instance.student_id
+                if (student_changed or offering_changed) and self.instance.student.attendance_records.filter(
+                    attendance_session__course_offering_id=self.instance.course_offering_id
+                ).exists():
+                    raise serializers.ValidationError(
+                        "มีประวัติเช็คชื่อในรายวิชานี้แล้ว — ไม่สามารถเปลี่ยนนักศึกษาหรือรายวิชาได้ "
+                        "ให้ถอนการลงทะเบียนแล้วลงทะเบียนใหม่แทน"
+                    )
+            target_status = (
+                attrs.get("enrollment_status")
+                or getattr(self.instance, "enrollment_status", None)
+                or "enrolled"
+            )
+            if target_status == "enrolled":
+                reinstating = (
+                    self.instance is None or self.instance.enrollment_status != "enrolled"
+                )
+                if reinstating and offering.status in {"cancelled", "completed"}:
+                    raise serializers.ValidationError(
+                        {"course_offering": "ไม่สามารถลงทะเบียนรายวิชาที่ปิดรับลงทะเบียนแล้วได้"}
+                    )
                 duplicate = Enrollment.objects.filter(
                     student=student,
                     course_offering__course=offering.course,
                     course_offering__academic_term=offering.academic_term,
                     enrollment_status="enrolled",
-                ).exists()
-                if duplicate:
+                )
+                if self.instance is not None:
+                    duplicate = duplicate.exclude(pk=self.instance.pk)
+                if duplicate.exists():
                     raise serializers.ValidationError(
                         {"course_offering": "นักศึกษาลงทะเบียนรายวิชานี้ในภาคการศึกษาเดียวกันแล้ว"}
                     )
