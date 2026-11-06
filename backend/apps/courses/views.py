@@ -123,6 +123,7 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
     search_fields = ["student__student_code", "student__first_name", "student__last_name"]
     ordering_fields = ["enrolled_at", "student_code"]
     ordering = ["-enrolled_at"]
+    MAX_BATCH = 200
 
     def get_queryset(self):
         qs = super().get_queryset().annotate(
@@ -214,6 +215,187 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
             metadata=metadata, request=request,
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _batch_ids(self, request):
+        """Validate a batch id list; returns (ids, error_response)."""
+        raw_ids = request.data.get("ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return None, error_response(
+                "กรุณาเลือกรายการอย่างน้อย 1 รายการ",
+                "INVALID_IDS",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        if len(raw_ids) > self.MAX_BATCH:
+            return None, error_response(
+                f"เลือกได้ครั้งละไม่เกิน {self.MAX_BATCH} รายการ",
+                "BATCH_TOO_LARGE",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        ids = []
+        for raw in raw_ids:
+            try:
+                ids.append(UUID(str(raw)))
+            except (TypeError, ValueError):
+                return None, error_response(
+                    "มีรหัสรายการที่ไม่ถูกต้อง",
+                    "INVALID_IDS",
+                    status.HTTP_400_BAD_REQUEST,
+                )
+        # Deduplicate while keeping the caller's order.
+        return list(dict.fromkeys(ids)), None
+
+    def _batch_result(self, instance, *, ok, skipped=False, code="", message=""):
+        return {
+            "id": str(instance.pk),
+            "student_code": instance.student.student_code,
+            "course_code": instance.course_offering.course.course_code,
+            "ok": ok,
+            "skipped": skipped,
+            "code": code,
+            "message": message,
+        }
+
+    def _batch_data(self, ids, results, succeeded, skipped):
+        failed = len(results) - succeeded - skipped
+        return {
+            "requested": len(ids),
+            "succeeded": succeeded,
+            "skipped": skipped,
+            "failed": failed,
+            "results": results,
+        }
+
+    @action(detail=False, methods=["post"], url_path="batch-withdraw")
+    def batch_withdraw(self, request):
+        """Withdraw many enrollments — keeps every attendance record.
+
+        Each row is handled independently: already-dropped rows are reported as
+        skipped and completed rows as failed, so one bad row never cancels the
+        rest of the batch.
+        """
+        ids, error = self._batch_ids(request)
+        if error:
+            return error
+        reason = str(request.data.get("reason", "")).strip()[:500]
+        if not reason:
+            return error_response(
+                "กรุณาระบุเหตุผลการถอนการลงทะเบียน",
+                "REASON_REQUIRED",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        scoped = {obj.pk: obj for obj in self.get_queryset().filter(pk__in=ids)}
+        results = []
+        succeeded = skipped = 0
+        for pk in ids:
+            instance = scoped.get(pk)
+            if instance is None:
+                results.append(
+                    {
+                        "id": str(pk),
+                        "student_code": "",
+                        "course_code": "",
+                        "ok": False,
+                        "skipped": False,
+                        "code": "NOT_FOUND",
+                        "message": "ไม่พบรายการหรือไม่มีสิทธิ์จัดการ",
+                    }
+                )
+                continue
+            if instance.enrollment_status == "completed":
+                results.append(
+                    self._batch_result(
+                        instance, ok=False, code="INVALID_STATUS",
+                        message="จบรายวิชาแล้ว — ไม่สามารถถอนการลงทะเบียนได้",
+                    )
+                )
+                continue
+            if instance.enrollment_status == "dropped":
+                skipped += 1
+                results.append(
+                    self._batch_result(
+                        instance, ok=True, skipped=True,
+                        message="ถอนการลงทะเบียนอยู่แล้ว",
+                    )
+                )
+                continue
+            with transaction.atomic():
+                instance.enrollment_status = "dropped"
+                instance.save(update_fields=["enrollment_status", "updated_at"])
+                log_audit(
+                    request.user, "enrollment_withdraw", "enrollment", instance.pk,
+                    metadata={
+                        **self._enrollment_meta(instance),
+                        "reason": reason,
+                        "batch": True,
+                        "batch_size": len(ids),
+                    },
+                    request=request,
+                )
+            succeeded += 1
+            results.append(self._batch_result(instance, ok=True))
+        data = self._batch_data(ids, results, succeeded, skipped)
+        message = f"ถอนการลงทะเบียนสำเร็จ {succeeded} รายการ"
+        if skipped:
+            message += f" · ข้ามรายการที่ถอนอยู่แล้ว {skipped} รายการ"
+        if data["failed"]:
+            message += f" · ไม่สำเร็จ {data['failed']} รายการ"
+        return success_response(data, message)
+
+    @action(detail=False, methods=["post"], url_path="batch-delete")
+    def batch_delete(self, request):
+        """Delete many enrollments — only rows without attendance history."""
+        ids, error = self._batch_ids(request)
+        if error:
+            return error
+        scoped = {obj.pk: obj for obj in self.get_queryset().filter(pk__in=ids)}
+        results = []
+        succeeded = skipped = 0
+        for pk in ids:
+            instance = scoped.get(pk)
+            if instance is None:
+                results.append(
+                    {
+                        "id": str(pk),
+                        "student_code": "",
+                        "course_code": "",
+                        "ok": False,
+                        "skipped": False,
+                        "code": "NOT_FOUND",
+                        "message": "ไม่พบรายการหรือไม่มีสิทธิ์จัดการ",
+                    }
+                )
+                continue
+            record_count = getattr(instance, "attendance_record_count", None)
+            if record_count is None:
+                record_count = self._record_count(instance)
+            if record_count:
+                results.append(
+                    self._batch_result(
+                        instance, ok=False, code="HAS_ATTENDANCE",
+                        message=(
+                            f"มีประวัติเช็คชื่อ {record_count} ครั้ง — "
+                            "ใช้ถอนการลงทะเบียนแทนการลบ"
+                        ),
+                    )
+                )
+                continue
+            resource_id = instance.pk
+            metadata = self._enrollment_meta(instance)
+            result = self._batch_result(instance, ok=True)
+            with transaction.atomic():
+                log_audit(
+                    request.user, "enrollment_delete", "enrollment", resource_id,
+                    metadata={**metadata, "batch": True, "batch_size": len(ids)},
+                    request=request,
+                )
+                instance.delete()
+            succeeded += 1
+            results.append(result)
+        data = self._batch_data(ids, results, succeeded, skipped)
+        message = f"ลบการลงทะเบียนสำเร็จ {succeeded} รายการ"
+        if data["failed"]:
+            message += f" · ไม่สำเร็จ {data['failed']} รายการ"
+        return success_response(data, message)
 
     @action(detail=True, methods=["post"], url_path="withdraw")
     def withdraw(self, request, pk=None):

@@ -340,3 +340,152 @@ class EnrollmentLifecycleTests(BaseSamsTest):
         bad = self.client.get("/api/v1/enrollments/", {"academic_term": "not-a-uuid"})
         self.assertEqual(bad.status_code, status.HTTP_200_OK)
         self.assertEqual(bad.data["data"], [])
+
+
+class EnrollmentBatchTests(BaseSamsTest):
+    """Batch withdraw/delete must process each row independently."""
+
+    def login_admin(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+
+    def new_student(self, code):
+        user = User.objects.create_user(
+            f"s{code}", f"{code}@x.ac.th", "Str0ngStud!Pass", role="student"
+        )
+        profile = user.student_profile
+        profile.student_code = code
+        profile.first_name = "ทดสอบ"
+        profile.last_name = code
+        profile.program = self.program
+        profile.class_group = self.group
+        profile.save()
+        return profile
+
+    def new_enrollment(self, code):
+        return Enrollment.objects.create(
+            student=self.new_student(code), course_offering=self.offering
+        )
+
+    def add_attendance(self, student):
+        now = timezone.now()
+        session = AttendanceSession.objects.create(
+            course_offering=self.offering,
+            instructor=self.instructor,
+            session_date=timezone.localdate(),
+            check_in_start=now - timedelta(minutes=5),
+            check_in_end=now + timedelta(minutes=5),
+        )
+        return AttendanceRecord.objects.create(
+            attendance_session=session, student=student, status="present",
+        )
+
+    def post_batch(self, path, ids, **extra):
+        return self.client.post(
+            path, {"ids": [str(i) for i in ids], **extra},
+            content_type="application/json",
+        )
+
+    def test_batch_withdraw_keeps_history_and_reports_skipped(self):
+        second = self.new_enrollment("B10002")
+        second.enrollment_status = "dropped"
+        second.save(update_fields=["enrollment_status"])
+        record = self.add_attendance(self.student)
+        self.login_admin()
+        response = self.post_batch(
+            "/api/v1/enrollments/batch-withdraw/",
+            [self.enrollment.pk, second.pk],
+            reason="ลงทะเบียนผิดกลุ่ม",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        data = response.data["data"]
+        self.assertEqual((data["succeeded"], data["skipped"], data["failed"]), (1, 1, 0))
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.enrollment_status, "dropped")
+        self.assertTrue(AttendanceRecord.objects.filter(pk=record.pk).exists())
+
+    def test_batch_withdraw_requires_reason(self):
+        self.login_admin()
+        response = self.post_batch(
+            "/api/v1/enrollments/batch-withdraw/", [self.enrollment.pk]
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertEqual(response.data["code"], "REASON_REQUIRED")
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.enrollment_status, "enrolled")
+
+    def test_batch_withdraw_reports_completed_rows_as_failed(self):
+        second = self.new_enrollment("B10003")
+        self.enrollment.enrollment_status = "completed"
+        self.enrollment.save(update_fields=["enrollment_status"])
+        self.login_admin()
+        response = self.post_batch(
+            "/api/v1/enrollments/batch-withdraw/",
+            [self.enrollment.pk, second.pk],
+            reason="ทดสอบบางแถวถอนไม่ได้",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        data = response.data["data"]
+        self.assertEqual((data["succeeded"], data["failed"]), (1, 1))
+        self.enrollment.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(self.enrollment.enrollment_status, "completed")
+        self.assertEqual(second.enrollment_status, "dropped")
+        failed = next(r for r in data["results"] if not r["ok"])
+        self.assertEqual(failed["code"], "INVALID_STATUS")
+
+    def test_batch_delete_mixed_history(self):
+        second = self.new_enrollment("B10004")
+        self.add_attendance(self.student)
+        self.login_admin()
+        response = self.post_batch(
+            "/api/v1/enrollments/batch-delete/",
+            [self.enrollment.pk, second.pk],
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        data = response.data["data"]
+        self.assertEqual((data["succeeded"], data["failed"]), (1, 1))
+        self.assertTrue(Enrollment.objects.filter(pk=self.enrollment.pk).exists())
+        self.assertFalse(Enrollment.objects.filter(pk=second.pk).exists())
+        failed = next(r for r in data["results"] if not r["ok"])
+        self.assertEqual(failed["code"], "HAS_ATTENDANCE")
+
+    def test_batch_delete_instructor_cannot_touch_other_teacher_rows(self):
+        other_user = User.objects.create_user(
+            "teacher9", "t9@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        foreign_offering = CourseOffering.objects.create(
+            course=self.course, academic_term=self.term,
+            instructor=other_user.instructor_profile,
+        )
+        foreign = Enrollment.objects.create(
+            student=self.new_student("B10005"), course_offering=foreign_offering,
+        )
+        own = self.new_enrollment("B10006")
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        response = self.post_batch(
+            "/api/v1/enrollments/batch-delete/",
+            [own.pk, foreign.pk],
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        data = response.data["data"]
+        self.assertEqual((data["succeeded"], data["failed"]), (1, 1))
+        self.assertFalse(Enrollment.objects.filter(pk=own.pk).exists())
+        self.assertTrue(Enrollment.objects.filter(pk=foreign.pk).exists())
+        failed = next(r for r in data["results"] if not r["ok"])
+        self.assertEqual(failed["code"], "NOT_FOUND")
+
+    def test_batch_rejects_empty_and_invalid_ids(self):
+        self.login_admin()
+        empty = self.client.post(
+            "/api/v1/enrollments/batch-delete/", {"ids": []},
+            content_type="application/json",
+        )
+        self.assertEqual(empty.status_code, status.HTTP_400_BAD_REQUEST, empty.data)
+        self.assertEqual(empty.data["code"], "INVALID_IDS")
+
+        invalid = self.client.post(
+            "/api/v1/enrollments/batch-delete/", {"ids": ["not-a-uuid"]},
+            content_type="application/json",
+        )
+        self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST, invalid.data)
+        self.assertEqual(invalid.data["code"], "INVALID_IDS")

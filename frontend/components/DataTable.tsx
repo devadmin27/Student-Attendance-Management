@@ -1,10 +1,38 @@
 "use client";
 /** Generic data table used by every list page. */
+import { useEffect, useRef } from "react";
+
 export interface ColumnDef<T> {
   key: string;
   label: string;
   render?: (row: T) => React.ReactNode;
   className?: string;
+}
+
+function SelectAllCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      aria-label="เลือกทั้งหมดในหน้านี้"
+      title="เลือกทั้งหมดในหน้านี้"
+      checked={checked}
+      onChange={(event) => onChange(event.target.checked)}
+      className="h-4 w-4 cursor-pointer accent-blue-700"
+    />
+  );
 }
 
 export default function DataTable<T extends { id: string }>({
@@ -13,18 +41,37 @@ export default function DataTable<T extends { id: string }>({
   loading,
   emptyMessage = "ยังไม่มีข้อมูล",
   renderActions,
+  selectedIds,
+  onToggleRow,
+  onToggleAll,
 }: {
   columns: ColumnDef<T>[];
   rows: T[];
   loading?: boolean;
   emptyMessage?: string;
   renderActions?: (row: T) => React.ReactNode;
+  selectedIds?: Set<string>;
+  onToggleRow?: (id: string, selected: boolean) => void;
+  onToggleAll?: (selected: boolean) => void;
 }) {
+  const selectable = Boolean(selectedIds && onToggleRow && onToggleAll);
+  const allSelected = selectable && rows.length > 0 && rows.every((row) => selectedIds!.has(row.id));
+  const someSelected = selectable && !allSelected && rows.some((row) => selectedIds!.has(row.id));
+  const extraColumns = (selectable ? 1 : 0) + (renderActions ? 1 : 0);
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
       <table className="w-full min-w-[640px] text-left text-sm">
         <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
           <tr>
+            {selectable && (
+              <th className="w-10 px-4 py-3 font-medium">
+                <SelectAllCheckbox
+                  checked={allSelected}
+                  indeterminate={someSelected}
+                  onChange={onToggleAll!}
+                />
+              </th>
+            )}
             {columns.map((col) => (
               <th key={col.key} className={`px-4 py-3 font-medium ${col.className ?? ""}`}>
                 {col.label}
@@ -36,31 +83,50 @@ export default function DataTable<T extends { id: string }>({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={columns.length + (renderActions ? 1 : 0)} className="px-4 py-10 text-center text-slate-500">
+              <td colSpan={columns.length + extraColumns} className="px-4 py-10 text-center text-slate-500">
                 <span className="inline-block animate-pulse">กำลังโหลดข้อมูล…</span>
               </td>
             </tr>
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length + (renderActions ? 1 : 0)} className="px-4 py-10 text-center text-slate-500">
+              <td colSpan={columns.length + extraColumns} className="px-4 py-10 text-center text-slate-500">
                 {emptyMessage}
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
-              <tr key={row.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
-                {columns.map((col) => (
-                  <td key={col.key} className={`px-4 py-3 align-top ${col.className ?? ""}`}>
-                    {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? "-")}
-                  </td>
-                ))}
-                {renderActions && (
-                  <td className="px-4 py-3 text-right align-top">
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">{renderActions(row)}</div>
-                  </td>
-                )}
-              </tr>
-            ))
+            rows.map((row) => {
+              const selected = selectable && selectedIds!.has(row.id);
+              return (
+                <tr
+                  key={row.id}
+                  className={`border-b border-slate-100 last:border-0 hover:bg-slate-50/60 ${
+                    selected ? "bg-blue-50/40" : ""
+                  }`}
+                >
+                  {selectable && (
+                    <td className="px-4 py-3 align-top">
+                      <input
+                        type="checkbox"
+                        aria-label={`เลือกแถว ${row.id}`}
+                        checked={selected}
+                        onChange={(event) => onToggleRow!(row.id, event.target.checked)}
+                        className="h-4 w-4 cursor-pointer accent-blue-700"
+                      />
+                    </td>
+                  )}
+                  {columns.map((col) => (
+                    <td key={col.key} className={`px-4 py-3 align-top ${col.className ?? ""}`}>
+                      {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? "-")}
+                    </td>
+                  ))}
+                  {renderActions && (
+                    <td className="px-4 py-3 text-right align-top">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">{renderActions(row)}</div>
+                    </td>
+                  )}
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>

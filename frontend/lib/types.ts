@@ -116,6 +116,26 @@ export interface Enrollment {
   attendance_record_count: number;
 }
 
+/** One row of a batch withdraw/delete response. */
+export interface EnrollmentBatchRow {
+  id: string;
+  student_code: string;
+  course_code: string;
+  ok: boolean;
+  skipped: boolean;
+  code: string;
+  message: string;
+}
+
+/** Result of `POST /enrollments/batch-withdraw/` or `batch-delete/`. */
+export interface EnrollmentBatchResult {
+  requested: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  results: EnrollmentBatchRow[];
+}
+
 export interface ClassSchedule {
   id: string;
   course_offering: string;

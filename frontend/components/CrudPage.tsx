@@ -106,11 +106,6 @@ function SelectSearchField({
     [needle, options],
   );
 
-  // New search text starts highlight back at the first match.
-  useEffect(() => {
-    setActive(0);
-  }, [needle]);
-
   // Keep the highlighted option visible while moving with the keyboard.
   useEffect(() => {
     if (!open) return;
@@ -171,6 +166,7 @@ function SelectSearchField({
           value={text}
           onChange={(event) => {
             onTextChange(event.target.value);
+            setActive(0); // new search text starts highlight at the first match
             setOpen(true);
           }}
           onFocus={() => {
@@ -234,6 +230,8 @@ export default function CrudPage<T extends { id: string }>({
   emptyMessage = "ยังไม่มีข้อมูล",
   transformRow,
   headerExtra,
+  selectable = false,
+  selectionActions,
 }: {
   title: string;
   basePath: string;
@@ -252,8 +250,13 @@ export default function CrudPage<T extends { id: string }>({
   canDelete?: boolean;
   emptyMessage?: string;
   transformRow?: (row: T) => T;
+  /** Show row checkboxes for batch actions (current page only). */
+  selectable?: boolean;
+  /** Buttons/inputs rendered when at least one row is selected. */
+  selectionActions?: (rows: T[], refresh: () => void, clearSelection: () => void) => React.ReactNode;
 }) {
   const [rows, setRows] = useState<T[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
@@ -282,6 +285,13 @@ export default function CrudPage<T extends { id: string }>({
       let list = data ?? [];
       if (transformRow) list = list.map(transformRow);
       setRows(list);
+      // Drop ids that are no longer on this page (deleted rows or new filters).
+      setSelectedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const visible = new Set(list.map((row) => row.id));
+        const next = new Set([...prev].filter((id) => visible.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
       setPages(envelope.pagination?.pages ?? 1);
       setCount(envelope.pagination?.count ?? list.length);
     } catch (error) {
@@ -302,6 +312,27 @@ export default function CrudPage<T extends { id: string }>({
   useEffect(() => {
     void refreshRef.current();
   }, [basePath, page, search, filterSig]);
+
+  // A selection belongs to one page/filter view; the handlers below clear it
+  // whenever the visible rows change so hidden ids never enter a batch.
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const toggleRow = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const toggleAll = useCallback(
+    (checked: boolean) => setSelectedIds(checked ? new Set(rows.map((row) => row.id)) : new Set()),
+    [rows],
+  );
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedIds.has(row.id)),
+    [rows, selectedIds],
+  );
 
   // Load select options once per unique options-key set (both modal FK selects and page filters).
   const optionsSig = useMemo(() => {
@@ -487,6 +518,7 @@ export default function CrudPage<T extends { id: string }>({
           className="flex flex-1 min-w-[240px] gap-2"
           onSubmit={(e) => {
             e.preventDefault();
+            clearSelection();
             setPage(1);
             setSearch(searchInput);
           }}
@@ -523,6 +555,7 @@ export default function CrudPage<T extends { id: string }>({
               <select
                 value={filterValues[f.name] ?? ""}
                 onChange={(e) => {
+                  clearSelection();
                   setPage(1);
                   setFilterValues((prev) => ({ ...prev, [f.name]: e.target.value }));
                 }}
@@ -540,6 +573,7 @@ export default function CrudPage<T extends { id: string }>({
           <button
             type="button"
             onClick={() => {
+              clearSelection();
               setFilterValues({});
               setSearchInput("");
               setSearch("");
@@ -552,11 +586,31 @@ export default function CrudPage<T extends { id: string }>({
         </div>
       )}
 
+      {selectable && selectedRows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <span className="font-medium">เลือกแล้ว {selectedRows.length} รายการ</span>
+          <span className="text-xs text-blue-700">(เฉพาะรายการในหน้านี้)</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectionActions?.(selectedRows, refresh, clearSelection)}
+          </div>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-auto rounded-lg border border-blue-300 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+          >
+            ล้างที่เลือก
+          </button>
+        </div>
+      )}
+
       <DataTable<T>
         columns={columns}
         rows={rows}
         loading={loading}
         emptyMessage={emptyMessage}
+        selectedIds={selectable ? selectedIds : undefined}
+        onToggleRow={selectable ? toggleRow : undefined}
+        onToggleAll={selectable ? toggleAll : undefined}
         renderActions={(row) => (
           <>
             {rowActions?.(row, refresh)}
@@ -581,7 +635,15 @@ export default function CrudPage<T extends { id: string }>({
           </>
         )}
       />
-      <PaginationControls page={page} pages={pages} count={count} onChange={setPage} />
+      <PaginationControls
+        page={page}
+        pages={pages}
+        count={count}
+        onChange={(next) => {
+          clearSelection();
+          setPage(next);
+        }}
+      />
 
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

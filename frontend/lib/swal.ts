@@ -58,9 +58,45 @@ export async function confirmDialog(options: {
   return result.isConfirmed;
 }
 
-export async function promptReason(title: string): Promise<string | null> {
+/** Escape untrusted API strings before putting them in a SweetAlert `html` body. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Batch summary dialog: counts plus an optional per-row list so the user can
+ * see exactly which rows were skipped or rejected.
+ */
+export async function showBatchSummary(options: {
+  icon: "success" | "warning" | "error";
+  title: string;
+  summary: string;
+  details?: string[];
+}): Promise<void> {
+  const details =
+    options.details && options.details.length > 0
+      ? `<div style="margin-top:12px;max-height:220px;overflow-y:auto;text-align:left;font-size:13px;line-height:1.6">${options.details
+          .map((line) => `<div>• ${escapeHtml(line)}</div>`)
+          .join("")}</div>`
+      : "";
+  await Swal.fire({
+    icon: options.icon,
+    title: options.title,
+    html: `<div>${escapeHtml(options.summary)}</div>${details}`,
+    confirmButtonColor: "#1d4ed8",
+    confirmButtonText: "ตกลง",
+  });
+}
+
+export async function promptReason(title: string, text?: string): Promise<string | null> {
   const result = await Swal.fire<string>({
     title,
+    text,
     input: "textarea",
     inputPlaceholder: "ระบุเหตุผลการแก้ไข",
     showCancelButton: true,

@@ -229,9 +229,9 @@ Deploy commit `b65d9a3` (ต่อจาก `85b273f`) แล้วตรวจ�
 
 ข้อมูลทดสอบ local (`DELUI01`, `SOFTUI`) ถูกลบออกจาก DB หลังทดสอบแล้ว
 
-## 12. Enrollments: ถอน/ลบ/ลงทะเบียนใหม่ + ตัวกรองภาคการศึกษา (2026-11-05)
+## 12. Enrollments: ถอน/ลบ/ลงทะเบียนใหม่ + ตัวกรองภาคการศึกษา + Batch (2026-11-05 – 2026-11-06)
 
-แก้ปัญหาการลงทะเบียนรายวิชาที่สอนไปแล้ว/ลงผิดพลาด โดยแยก **ถอน** (เก็บประวัติ) ออกจาก **ลบ** (เฉพาะแถวที่ยังไม่มีประวัติ) — backend บังคับกฎเดียวกัน ไม่ใช่แค่ซ่อนปุ่มบน UI
+แก้ปัญหาการลงทะเบียนรายวิชาที่สอนไปแล้ว/ลงผิดพลาด โดยแยก **ถอน** (เก็บประวัติ) ออกจาก **ลบ** (เฉพาะแถวที่ยังไม่มีประวัติ) — backend บังคับกฎเดียวกัน ไม่ใช่แค่ซ่อนปุ่มบน UI — และเพิ่ม **เลือกหลายรายการ + Batch process** ที่ประมวลผลทีละแถว
 
 ### Backend (`apps.courses`)
 
@@ -249,6 +249,12 @@ Deploy commit `b65d9a3` (ต่อจาก `85b273f`) แล้วตรวจ�
 | ตัวกรอง `?academic_term=` (UUID / ค่าไม่ถูกต้อง) | ✅ กรองถูก / คืน list ว่าง |
 | bulk enroll มีแถวที่ถอนอยู่ | ✅ `created=0, skipped=0, dropped=1` และไม่ปรับสถานะกลับเป็น enrolled เอง |
 | bulk enroll ใน offering `completed` | ✅ 400 `OFFERING_CLOSED` |
+| **batch withdraw** 2 แถว (แถวปกติ + แถวถอนอยู่แล้ว) | ✅ 200, `succeeded=1, skipped=1, failed=0`; ประวัติยังอยู่ครบ |
+| **batch withdraw** ไม่ส่ง `reason` | ✅ 400 `REASON_REQUIRED` และไม่มีแถวใดถูกเปลี่ยนสถานะ |
+| **batch withdraw** มีแถว `completed` ปน | ✅ 200, `succeeded=1, failed=1` (`INVALID_STATUS`) — แถวดีถูกถอน แถวที่จบแล้วไม่เปลี่ยน |
+| **batch delete** แถวมีประวัติ + ไม่มีประวัติ | ✅ 200, `succeeded=1, failed=1` (`HAS_ATTENDANCE`); แถวที่มีประวัติยังอยู่ |
+| **batch delete** instructor แตะแถวของอาจารย์อื่น | ✅ 200, แถวของตัวเองถูกลบ, แถวนอก scope ได้ `NOT_FOUND` และไม่ถูกลบ |
+| **batch** ส่ง `ids` ว่าง / ไม่ใช่ UUID | ✅ 400 `INVALID_IDS` |
 
 ### UI (in-app Chromium, localhost:3000, 1366×900)
 
@@ -263,10 +269,24 @@ Deploy commit `b65d9a3` (ต่อจาก `85b273f`) แล้วตรวจ�
 | กด **ลบ** TST9002 (ไม่มีประวัติ) | ✅ dialog เตือนลบถาวร, `DELETE` **204**, แถวหายจากตาราง |
 | เลือกภาคการศึกษา 2569/2 | ✅ request มี `academic_term=<uuid>` และเหลือเฉพาะรายการของภาคนั้น (AI) |
 
+### Batch (multiselect) — UI
+
+ทดสอบฝั่ง instructor (`teach1`) บน `/instructor/enrollments` กับ offering SC222 และนักศึกษาชั่วคราว `BATCH01`–`BATCH04`:
+
+| สถานการณ์ | ผลที่ยืนยัน |
+|---|---|
+| ติ๊กเลือก 3 แถว | ✅ แถบ "เลือกแล้ว 3 รายการ" + ปุ่ม "ถอนที่เลือก (3)" / "ลบที่เลือก (3)" แสดง; แถวที่เลือกมีพื้นหลังต่าง |
+| ติ๊ก "เลือกทั้งหมดในหน้านี้" | ✅ เลือกครบ 5 แถว; เมื่อปลด 1 แถว checkbox หัวตารางเป็น `indeterminate` และนับ 4 |
+| **ลบที่เลือก** 3 แถว (1 มีประวัติ + 2 ไม่มี) | ✅ dialog เตือน "มี 1 รายการที่มีประวัติ…จะไม่ถูกลบ"; `POST …/batch-delete/` 200; สรุป "สำเร็จ 2 · ข้าม 0 · ไม่สำเร็จ 1" พร้อมรายละเอียด `BATCH01 — มีประวัติเช็คชื่อ 1 ครั้ง`; ตารางเหลือ 5 แถว และ BATCH03/BATCH04 หายไป |
+| **ถอนที่เลือก** 2 แถว (1 กำลังศึกษา + 1 ถอนอยู่แล้ว) | ✅ SweetAlert บังคับเหตุผลและแจ้ง "1 รายการที่ถอนอยู่แล้วจะถูกข้าม"; `POST …/batch-withdraw/` 200; สรุป "สำเร็จ 1 · ข้าม 1 · ไม่สำเร็จ 0" พร้อมรายละเอียดแถวที่ข้าม |
+| หลังถอน | ✅ `BATCH01` เป็น "ถอนรายวิชา" และคอลัมน์ประวัติยังแสดง **1 ครั้ง**; `BATCH02` คงสถานะเดิม; selection ถูกล้างหลังปิดสรุป |
+| เปลี่ยนหน้า/คำค้น/ตัวกรอง | ✅ selection ถูกล้าง (ไม่ส่ง id ที่มองไม่เห็นเข้า batch) |
+
 ### ตรวจสอบเพิ่มเติม
 
-- ตรวจ DB หลัง UI: TST9001 = `enrolled` + record 1 แถว; TST9002 ไม่มี enrollment; audit log มี `enrollment_withdraw` (พร้อม reason), `enrollment_reinstate`, `enrollment_delete`
-- เก็บกวาดข้อมูลทดสอบ local แล้ว (`TST9001`/`TST9002` + record + enrollment = 0 ทั้งหมด)
-- Backend suite: ✅ **88/88** (SQLite, `DEBUG=True`)
+- ตรวจ DB หลัง UI batch: `BATCH01` = `dropped` + AttendanceRecord 1 แถว, `BATCH02` = `dropped`; `BATCH03`/`BATCH04` ไม่มี enrollment; audit log มี `enrollment_withdraw` (`reason`, `batch: true`, `batch_size: 2`) และ `enrollment_delete` (`batch: true`, `batch_size: 3`)
+- ตรวจ DB หลัง UI ก่อนหน้า: TST9001 = `enrolled` + record 1 แถว; TST9002 ไม่มี enrollment; audit log มี `enrollment_withdraw` (พร้อม reason), `enrollment_reinstate`, `enrollment_delete`
+- เก็บกวาดข้อมูลทดสอบ local แล้ว (`TST9001`/`TST9002` และ `BATCH01`–`BATCH04` + record + session + enrollment + user = 0 ทั้งหมด)
+- Backend suite: ✅ **94/94** (SQLite, `DEBUG=True`)
 - `npx tsc --noEmit` และ `npx eslint` ผ่าน 0 error
 
