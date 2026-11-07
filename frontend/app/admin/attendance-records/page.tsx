@@ -178,6 +178,24 @@ function RecordsContent() {
           { key: "checked_in_at", label: "เวลาเช็คชื่อ", render: (r) => formatThaiDateTime(r.checked_in_at) },
           { key: "method_display", label: "วิธีเช็ค" },
           {
+            key: "location",
+            label: "พิกัดตอนสแกน",
+            render: (r) => {
+              if (r.latitude !== null && r.longitude !== null) {
+                const acc = r.location_accuracy_m !== null ? ` ±${r.location_accuracy_m} ม.` : "";
+                return `${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}${acc}`;
+              }
+              const labels: Record<string, string> = {
+                denied: "ไม่ให้สิทธิ์ตำแหน่ง",
+                unavailable: "หาตำแหน่งไม่ได้",
+                unsupported: "อุปกรณ์ไม่รองรับ",
+              };
+              return r.location_status
+                ? labels[r.location_status] ?? "-"
+                : "-";
+            },
+          },
+          {
             key: "edit_info",
             label: "ผู้แก้ไขล่าสุด",
             render: (r) => (r.edited_by_username ? `${r.edited_by_username}${r.edit_reason ? ` — ${r.edit_reason}` : ""}` : "-"),

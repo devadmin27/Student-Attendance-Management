@@ -201,6 +201,11 @@
 | `status` | varchar(16) |  |
 | `checked_in_at` | timestamptz |  |
 | `check_in_method` | varchar(16) |  |
+| `latitude` | numeric(9,6) | null = ไม่มีพิกัด — evidence จากอุปกรณ์นักศึกษาตอนสแกน (ไม่บังคับ: ผู้ใช้ไม่ให้สิทธิ์ก็เช็คชื่อได้) |
+| `longitude` | numeric(9,6) | คู่กับ `latitude` | 
+| `location_accuracy_m` | numeric(7,1) | ความคลาดเคลื่อนพิกัด (เมตร) จากเบราว์เซอร์ |
+| `location_status` | varchar(16) | `granted` (มีพิกัด) / `denied` (ผู้ใช้ปฏิเสธ) / `unavailable` (หาตำแหน่งไม่ได้) / `unsupported` / ว่าง (บันทึกโดยอาจารย์) |
+| `client_ip` | inet/varchar | IP ของ request เช็คชื่อ (staff เท่านั้นที่เห็น, จาก X-Forwarded-For ตัวแรก → X-Real-IP → REMOTE_ADDR) |
 | `edit_reason` | text |  |
 | `source_metadata` | jsonb |  |
 | `created_at` | timestamptz | สร้างเมื่อ (UTC) |

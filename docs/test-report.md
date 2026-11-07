@@ -314,3 +314,31 @@ dropdown เลือก "รายวิชาที่เปิดสอน" �
 - ไม่มีการเปลี่ยน backend/model → ไม่มี migration
 - ข้อมูลที่ใช้ทดสอบเป็นข้อมูลจริงใน DB local (ตัวอย่าง offering ที่สร้างไว้ก่อนหน้า) — ไม่ได้สร้างข้อมูลทดสอบชั่วคราว
 
+## 14. บันทึกพิกัดอุปกรณ์ตอนสแกน (evidence ไม่บังคับ — fail-open) (2026-11-07)
+
+ตอนนักศึกษากดเช็คชื่อหน้า `/student/scan` หน้าจะขอตำแหน่งอุปกรณ์ (Geolocation API, timeout 8 วิ) แล้วส่งไปพร้อม token — **เป็นข้อมูลหลักฐานเท่านั้น ไม่ถูกใช้ตัดสินสิทธิ์เช็คชื่อ**: ผู้ใช้ปฏิเสธ / หาตำแหน่งไม่ได้ / อุปกรณ์ไม่รองรับ → ส่ง `location_status` แทน และเช็คชื่อยังสำเร็จเหมือนเดิม ฝั่ง server บันทึกลง `attendance_records` คอลัมน์ใหม่: `latitude`, `longitude`, `location_accuracy_m`, `location_status` (`granted`/`denied`/`unavailable`/`unsupported`/ว่างเมื่อบันทึกโดยอาจารย์), `client_ip` (ตัวแรกของ `X-Forwarded-For` → `X-Real-IP` → `REMOTE_ADDR`) · server สร้างสถานะ `granted` เองจากพิกัดจริงเท่านั้น (client ประกาศเองไม่ได้ → 400) · นักศึกษาไม่เห็น IP ของตัวเองใน history (staff เท่านั้น) · หน้า `/admin/attendance-records` เพิ่มคอลัมน์ "พิกัดตอนสแกน"
+
+### Backend tests
+
+- รวม suite: ✅ **100/100** (SQLite, `DEBUG=True`) — เพิ่ม 6 tests: พิกัดถูกบันทึก + IP, X-Forwarded-For ชนะ REMOTE_ADDR, ไม่ส่งพิกัด → `unavailable`, `denied` → ยังสำเร็จ, client ประกาศ `granted` เอง → 400, IP ซ่อนจากนักศึกษาแต่ admin เห็น
+- Migration: `attendance.0002_attendancerecord_client_ip_attendancerecord_latitude_and_more` (ใช้แล้วบน SQLite dev; **prod ต้องรัน migrate ตอน deploy**)
+
+### UI (in-app Chromium, localhost:3000) — flow `/student/scan` กรอก token ด้วยมือ (code path เดียวกับการสแกน)
+
+| สถานการณ์ | ผลที่ยืนยัน |
+|---|---|
+| เบราว์เซอร์ปฏิเสธตำแหน่ง (จริงจาก environment) | ✅ ขึ้น "กำลังขอตำแหน่งอุปกรณ์… (ไม่ยินยอมกดเช็คชื่อได้อยู่)" → เช็คชื่อ **200 สำเร็จ**; DB: `location_status='denied'`, ไม่มีพิกัด, `client_ip=127.0.0.1` |
+| ผู้ใช้อนุญาต + มีพิกัด (จำลองสิทธิ์ Allow + พิกัดจริงจากจอ) | ✅ เช็คชื่อ **200 สำเร็จ**; DB: `lat=13.736717, lng=100.523186, accuracy=12.5, location_status='granted', client_ip=127.0.0.1` |
+| หน้า `/admin/attendance-records` (sadmin) | ✅ คอลัมน์ "พิกัดตอนสแกน" แสดง `13.73672, 100.52319 ±12.5 ม.` สำหรับแถวมีพิกัด, `-` สำหรับแถวเก่า |
+| ไม่ส่งตำแหน่งเลย (client เก่า) | ✅ (unit test) เช็คชื่อสำเร็จ, record `unavailable` — ยืนยันว่า process ทำงานแบบไม่บังคับเต็ม 100% |
+
+### บั๊กที่จับได้และแก้แล้วในรอบนี้
+
+- DRF คืน `DecimalField` เป็น string ทำให้หน้า Records โหลดไม่ขึ้น (`r.latitude.toFixed is not a function`) → แก้ serializer ส่ง `FloatField` (ตัวเลข) — ยืนยันหน้าโหลดและแสดงผลถูกต้องหลังแก้
+
+### ข้อจำกัดที่บันทึกไว้
+
+- **การสแกนผ่านกล้องจริง** ไม่ได้ทดสอบในรอบนี้ (automation ของเราไม่มีกล้อง/QR จริง) — ทดสอบผ่านช่องกรอก token ด้วยมือ ซึ่งใช้ `submitToken` code path เดียวกัน (ขอพิกัด + POST)
+- ชี้แจงพฤติกรรม token TTL รอบทดสอบ: dev server รอบนี้ตั้ง `ATTENDANCE_QR_TTL_SECONDS=600` เพื่อสะดวกในการทดสอบ (prod ยังใช้ 30 วิ ตาม default) — ผลเช็คชื่อไม่ขึ้นกับ TTL
+- เก็บกวาดข้อมูลทดสอบ local แล้ว: session ทดสอบ + QR tokens + records + enrollment `student01`→SC222 ถูกลบหมด (คาบเดิม `65de7cae…` ของ offering 30110001 คงสถานะเดิม)
+

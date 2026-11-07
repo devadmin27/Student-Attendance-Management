@@ -118,6 +118,11 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     method_display = serializers.CharField(source="get_check_in_method_display", read_only=True)
     edited_by_username = serializers.CharField(source="edited_by.username", read_only=True, default=None)
+    # DRF would render DecimalFields as strings; the SPA expects numbers.
+    latitude = serializers.FloatField(read_only=True)
+    longitude = serializers.FloatField(read_only=True)
+    location_accuracy_m = serializers.FloatField(read_only=True)
+    client_ip = serializers.SerializerMethodField()
 
     class Meta:
         model = AttendanceRecord
@@ -126,6 +131,8 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             "student", "student_code", "student_name",
             "status", "status_display", "checked_in_at",
             "check_in_method", "method_display",
+            "latitude", "longitude", "location_accuracy_m", "location_status",
+            "client_ip",
             "edited_by_username", "edit_reason",
             "created_at", "updated_at",
         ]
@@ -136,6 +143,13 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
 
     def get_student_name(self, obj):
         return f"{obj.student.first_name} {obj.student.last_name}"
+
+    def get_client_ip(self, obj):
+        """IP is staff-facing evidence — hide it from students' own history."""
+        user = self.context.get("request").user if self.context.get("request") else None
+        if user is not None and getattr(user, "role", "") in {"admin", "instructor"}:
+            return obj.client_ip
+        return None
 
 
 class AttendanceRecordUpdateSerializer(serializers.ModelSerializer):
@@ -157,11 +171,35 @@ class AttendanceRecordUpdateSerializer(serializers.ModelSerializer):
 
 
 class CheckInSerializer(serializers.Serializer):
-    """Body for POST /attendance/check-in/ — only the scanned token; nothing
-    else trusted from the client (spec §10.2: session id/status are not taken
-    from client)."""
+    """Body for POST /attendance/check-in/ — the scanned token plus OPTIONAL
+    device location. Session identity is derived server-side (§10.2). The
+    location is evidence only (fail-open): omitting it never blocks a check-in
+    and out-of-range values simply fail normal payload validation (400)."""
 
     token = serializers.CharField(write_only=True, max_length=256)
+    latitude = serializers.FloatField(required=False, min_value=-90, max_value=90)
+    longitude = serializers.FloatField(required=False, min_value=-180, max_value=180)
+    accuracy = serializers.FloatField(required=False, min_value=0)
+    location_status = serializers.ChoiceField(
+        required=False, choices=["denied", "unavailable", "unsupported"],
+    )
+
+    def to_internal_value(self, data):
+        attrs = super().to_internal_value(data)
+        lat, lng = attrs.get("latitude"), attrs.get("longitude")
+        if lat is not None and lng is not None:
+            # Coordinates present → client sent them; server marks granted and
+            # ignores any claimed status ("granted" can never come from the wire).
+            attrs["location"] = {
+                "latitude": lat, "longitude": lng,
+                "accuracy": attrs.get("accuracy"),
+                "status": "granted",
+            }
+        else:
+            status = attrs.get("location_status") or "unavailable"
+            attrs["location"] = {"latitude": None, "longitude": None,
+                                 "accuracy": None, "status": status}
+        return attrs
 
 
 class CheckInResultSerializer(serializers.Serializer):

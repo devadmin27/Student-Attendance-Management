@@ -111,8 +111,13 @@ def validate_token(value: str, session_id=None) -> QRToken:
 # ---------------------------------------------------------------------------
 # Check-in
 # ---------------------------------------------------------------------------
-def check_in(user, raw_token: str) -> AttendanceRecord:
-    """QR check-in for a student. Applies spec §10.3 validations in order."""
+def check_in(user, raw_token: str, location: dict | None = None,
+             client_ip: str | None = None) -> AttendanceRecord:
+    """QR check-in for a student. Applies spec §10.3 validations in order.
+
+    `location` (from CheckInSerializer.to_internal_value) and `client_ip`
+    are optional evidence only — never gating fields.
+    """
     token = validate_token(raw_token)
     session = token.attendance_session
     if not token.is_valid_now:
@@ -157,6 +162,11 @@ def check_in(user, raw_token: str) -> AttendanceRecord:
                 check_in_method="qr",
                 qr_token=token,
                 source_metadata={"issued_at": token.issued_at.isoformat()},
+                latitude=location["latitude"] if location else None,
+                longitude=location["longitude"] if location else None,
+                location_accuracy_m=location["accuracy"] if location else None,
+                location_status=location["status"] if location else "",
+                client_ip=client_ip,
             )
     except IntegrityError:
         # Unique(session, student) raised — the earlier request wins.

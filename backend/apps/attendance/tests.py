@@ -135,6 +135,94 @@ class CheckInTests(BaseSamsTest):
         # Server timestamp is authoritative (not trustworthy device time)
         self.assertIsNotNone(record.checked_in_at)
 
+    # ------------------------------------------------------------------
+    # Optional device-location evidence (fail-open design)
+    # ------------------------------------------------------------------
+    def test_checkin_with_coordinates_records_evidence(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        response = self.client.post(
+            "/api/v1/attendance/check-in/",
+            {"token": raw, "latitude": 13.736717, "longitude": 100.523186,
+             "accuracy": 8.5},
+            REMOTE_ADDR="10.20.30.40",
+        )
+        self.assertEqual(response.status_code, 200)
+        record = AttendanceRecord.objects.get()
+        self.assertEqual(str(record.latitude), "13.736717")
+        self.assertEqual(str(record.longitude), "100.523186")
+        self.assertEqual(str(record.location_accuracy_m), "8.5")
+        self.assertEqual(record.location_status, "granted")
+        self.assertEqual(record.client_ip, "10.20.30.40")
+
+    def test_checkin_x_forwarded_for_precedes_remote_addr(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        response = self.client.post(
+            "/api/v1/attendance/check-in/",
+            {"token": raw},
+            REMOTE_ADDR="10.0.0.2",
+            HTTP_X_FORWARDED_FOR="203.0.113.7, 10.0.0.3",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(AttendanceRecord.objects.get().client_ip, "203.0.113.7")
+
+    def test_checkin_without_location_info_still_succeeds_unavailable(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        # Old client behaviour: token only — check-in must not be gated.
+        response = self.client.post("/api/v1/attendance/check-in/", {"token": raw})
+        self.assertEqual(response.status_code, 200)
+        record = AttendanceRecord.objects.get()
+        self.assertIsNone(record.latitude)
+        self.assertIsNone(record.longitude)
+        self.assertEqual(record.location_status, "unavailable")
+
+    def test_checkin_denied_location_still_succeeds(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        response = self.client.post(
+            "/api/v1/attendance/check-in/",
+            {"token": raw, "location_status": "denied"},
+        )
+        self.assertEqual(response.status_code, 200)
+        record = AttendanceRecord.objects.get()
+        self.assertEqual(record.location_status, "denied")
+        self.assertIsNone(record.latitude)
+
+    def test_client_cannot_self_declare_granted(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        # "granted" without coordinates is not an accepted wire value — the
+        # server derives granted from actual coordinates only.
+        response = self.client.post(
+            "/api/v1/attendance/check-in/",
+            {"token": raw, "location_status": "granted"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_client_ip_hidden_from_student_not_staff(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.post(
+            "/api/v1/attendance/check-in/",
+            {"token": self.issue_token()},
+            REMOTE_ADDR="203.113.5.9",
+        )
+        self.assertEqual(response.status_code, 200)
+        history = self.client.get("/api/v1/attendance/my-history/")
+        self.assertEqual(history.status_code, 200)
+        rows = history.data["data"] if isinstance(history.data.get("data"), list) else history.data["data"]["results"]
+        row = next(r for r in rows if str(r["id"]) == str(AttendanceRecord.objects.get().pk))
+        self.assertIsNone(row["client_ip"])
+        self.assertEqual(row["location_status"], "unavailable")
+        # staff still sees the IP on the shared records endpoint
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        staff_view = self.client.get("/api/v1/attendance/records/")
+        staff_data = staff_view.data["data"]
+        staff_rows = staff_data if isinstance(staff_data, list) else staff_data["results"]
+        staff_row = next(r for r in staff_rows if str(r["id"]) == str(AttendanceRecord.objects.get().pk))
+        self.assertEqual(staff_row["client_ip"], "203.113.5.9")
+
     def test_expired_token_rejected(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")
         token = services.issue_token(self.session, self.instructor_user)

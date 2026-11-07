@@ -164,6 +164,17 @@ class AttendanceRecord(models.Model):
         ("manual", "บันทึกโดยอาจารย์"),
     )
 
+    # Location of the scanning device at check-in — OPTIONAL evidence.
+    # Fail-open: the browser only yields coordinates when the student grants
+    # permission; a refused/failed lookup never blocks the check-in itself
+    # (location_status marks what happened instead).
+    LOCATION_STATUS_CHOICES = (
+        ("granted", "บันทึกพิกัด"),
+        ("denied", "ผู้ใช้ไม่อนุญาต"),
+        ("unavailable", "หาตำแหน่งไม่ได้"),
+        ("unsupported", "อุปกรณ์ไม่รองรับ"),
+    )
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     attendance_session = models.ForeignKey(
         AttendanceSession, on_delete=models.CASCADE, related_name="records",
@@ -190,6 +201,21 @@ class AttendanceRecord(models.Model):
     )
     edit_reason = models.TextField("เหตุผลการแก้ไข", blank=True, default="")
     source_metadata = models.JSONField("ข้อมูลอ้างอิงแหล่งที่มา", default=dict, blank=True)
+    latitude = models.DecimalField(
+        "ละติจูด", max_digits=9, decimal_places=6, null=True, blank=True,
+    )
+    longitude = models.DecimalField(
+        "ลองจิจูด", max_digits=9, decimal_places=6, null=True, blank=True,
+    )
+    location_accuracy_m = models.DecimalField(
+        "ความคลาดเคลื่อนพิกัด (เมตร)", max_digits=7, decimal_places=1,
+        null=True, blank=True,
+    )
+    location_status = models.CharField(
+        "สถานะการขอพิกัด", max_length=16, choices=LOCATION_STATUS_CHOICES,
+        blank=True, default="",  # ว่าง = ไม่ได้ทำการขอพิกัด (เช่น บันทึกโดยอาจารย์)
+    )
+    client_ip = models.GenericIPAddressField("IP ของอุปกรณ์", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

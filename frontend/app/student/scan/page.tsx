@@ -1,8 +1,11 @@
 "use client";
 /**
  * Student QR check-in page.
- * Scans the rotating session QR (html5-qrcode) and posts ONLY the token to
- * /attendance/check-in/ — the session identity is derived server-side (§10.2).
+ * Scans the rotating session QR (html5-qrcode) and posts the token plus
+ * OPTIONAL device-location evidence to /attendance/check-in/ — the session
+ * identity is derived server-side (§10.2). Location is fail-open: a refusal,
+ * timeout or unsupported browser sends a status instead and never blocks the
+ * check-in.
  */
 import { useEffect, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
@@ -13,6 +16,43 @@ import { formatThaiDate, formatThaiTime } from "@/lib/format";
 import { alertError, toastSuccess } from "@/lib/swal";
 import type { CheckInResult } from "@/lib/types";
 
+type LocationStatus = "denied" | "unavailable" | "unsupported";
+
+type ResolvedLocation =
+  | { latitude: number; longitude: number; accuracy: number }
+  | { status: LocationStatus };
+
+/** Best-effort device position; never throws — resolves a fail-open result. */
+function locate(maxWaitMs = 8000): Promise<ResolvedLocation> {
+  if (typeof navigator === "undefined" || !navigator.geolocation) {
+    return Promise.resolve({ status: "unsupported" });
+  }
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value: ResolvedLocation) => {
+      if (!done) {
+        done = true;
+        resolve(value);
+      }
+    };
+    navigator.geolocation.getCurrentPosition(
+      (pos) =>
+        finish({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        }),
+      (err) =>
+        finish(
+          err.code === GeolocationPositionError.PERMISSION_DENIED
+            ? { status: "denied" }
+            : { status: "unavailable" },
+        ),
+      { enableHighAccuracy: true, timeout: maxWaitMs, maximumAge: 0 },
+    );
+  });
+}
+
 export default function StudentScanPage() {
   const user = useRequireRole(["student"]);
   const [scanning, setScanning] = useState(false);
@@ -20,6 +60,7 @@ export default function StudentScanPage() {
   const [manualToken, setManualToken] = useState("");
   const [result, setResult] = useState<CheckInResult | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
   const scannerRef = useRef<import("html5-qrcode").Html5Qrcode | null>(null);
   const handledRef = useRef(false);
 
@@ -56,11 +97,23 @@ export default function StudentScanPage() {
     if (busy || handledRef.current) return;
     handledRef.current = true;
     setBusy(true);
+    setLocating(true);
     try {
+      // Fail-open device-location evidence: a refusal/timeout/unsupported
+      // browser resolves a status and the check-in still goes through.
+      const location = await locate();
+      const body: Record<string, unknown> = { token };
+      if ("latitude" in location) {
+        body.latitude = location.latitude;
+        body.longitude = location.longitude;
+        body.accuracy = location.accuracy;
+      } else {
+        body.location_status = location.status;
+      }
       const { data, envelope } = await samsRequest<CheckInResult>({
         url: "/attendance/check-in/",
         method: "POST",
-        data: { token },
+        data: body,
       });
       setResult(data);
       await toastSuccess(envelope.message);
@@ -72,6 +125,7 @@ export default function StudentScanPage() {
       }
     } finally {
       setBusy(false);
+      setLocating(false);
       setTimeout(() => {
         handledRef.current = false;
       }, 600);
@@ -151,7 +205,7 @@ export default function StudentScanPage() {
               </button>
             )}
             {cameraError && <p className="text-center text-xs text-amber-700">{cameraError}</p>}
-            {busy && <p className="text-sm text-slate-500">กำลังส่งข้อมูลเช็คชื่อ…</p>}
+            {busy && <p className="text-sm text-slate-500">{locating ? "กำลังขอตำแหน่งอุปกรณ์… (ไม่ยินยอมกดเช็คชื่อได้อยู่)" : "กำลังส่งข้อมูลเช็คชื่อ…"}</p>}
           </div>
         </PageCard>
 

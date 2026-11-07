@@ -65,7 +65,7 @@ Error response (ผ่าน `sams_exception_handler`):
 
 | Method | Path | Auth | Response |
 |---|---|---|---|
-| POST | `attendance/check-in/` | student (throttle `checkin: 20/min`) | ส่ง token → `present`/`late`; token หมดอายุ/ใช้ซ้ำ → 409 / 400 |
+| POST | `attendance/check-in/` | student (throttle `checkin: 20/min`) | ส่ง token → `present`/`late`; token หมดอายุ/ใช้ซ้ำ → 409 / 400 · **ตัวเลือก studio:** ส่ง `latitude`,`longitude`,`accuracy` (พิกัดอุปกรณ์ — ระบบบันทึก evidence ไม่ใช้ตัดสินสิทธิ์) หรือ `location_status` = `denied`/`unavailable`/`unsupported` เมื่อไม่มีพิกัด — ไม่ส่งก็เช็คชื่อได้เหมือนเดิม |
 | GET | `attendance/my-history/` | student | ประวัติเช็คชื่อของตัวเอง (ทดสอบ UI: 16 rows) |
 
 ## 5. Reports ✅
@@ -108,10 +108,17 @@ curl -X POST http://localhost:8000/api/v1/auth/login/ \
   -c cookies.txt \
   -d '{"username":"admin","password":"..."}'
 
-# Check-in (student)
+# Check-in (student) — token เพียงอย่างเดียวก็ใช้ได้ (fail-open)
 curl -X POST http://localhost:8000/api/v1/attendance/check-in/ \
   -H "Authorization: Bearer <access>" -H "Content-Type: application/json" \
   -d '{"token":"<raw QR token>"}'
+
+# Check-in พร้อม evidence พิกัดอุปกรณ์ (ไม่บังคับ — ส่งไม่ได้/ผู้ใช้ปฏิเสธก็เช็คชื่อได้)
+# ส่งแบบพิกัด → ระบบบันทึก location_status = "granted" (สถานะ granted ห้ามมาจาก client)
+# หรือส่ง {"location_status":"denied"|"unavailable"|"unsupported"} เมื่อไม่มีพิกัด
+curl -X POST http://localhost:8000/api/v1/attendance/check-in/ \
+  -H "Authorization: Bearer <access>" -H "Content-Type: application/json" \
+  -d '{"token":"<raw QR token>","latitude":13.736717,"longitude":100.523186,"accuracy":8.5}'
 ```
 
 ## ข้อควรปฏิบัติเรียกใช้จริง

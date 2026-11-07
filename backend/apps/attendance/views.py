@@ -28,6 +28,7 @@ from apps.attendance.serializers import (
     AttendanceRecordSerializer,
     AttendanceRecordUpdateSerializer,
     AttendanceSessionCreateSerializer,
+
     AttendanceSessionSerializer,
     CheckInResultSerializer,
     CheckInSerializer,
@@ -282,6 +283,21 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         )
 
 
+def client_ip_from_request(request) -> str | None:
+    """Client IP for evidence: behind a reverse proxy, trust the first hop of
+    X-Forwarded-For, else X-Real-IP, else REMOTE_ADDR. Return None (never a
+    placeholder) when nothing sensible is present."""
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    real = request.META.get("HTTP_X_REAL_IP")
+    if real and real.strip():
+        return real.strip()
+    return request.META.get("REMOTE_ADDR") or None
+
+
 class CheckInView(APIView):
     """Student QR check-in. Only the scanned token is accepted from the body."""
 
@@ -298,7 +314,12 @@ class CheckInView(APIView):
         serializer = CheckInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            record = services.check_in(request.user, serializer.validated_data["token"])
+            record = services.check_in(
+                request.user,
+                serializer.validated_data["token"],
+                location=serializer.validated_data.get("location"),
+                client_ip=client_ip_from_request(request),
+            )
         except Exception:
             raise
         from apps.attendance.serializers import CheckInResultSerializer

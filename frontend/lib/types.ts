@@ -204,6 +204,13 @@ export interface AttendanceRecord {
   checked_in_at: string;
   check_in_method: "qr" | "manual";
   method_display: string;
+  /** Device-location evidence from the scan (fail-open, may be null) */
+  latitude: number | null;
+  longitude: number | null;
+  location_accuracy_m: number | null;
+  location_status: "" | "granted" | "denied" | "unavailable" | "unsupported";
+  /** Staff-facing only — always null for students on their own history */
+  client_ip: string | null;
   edited_by_username: string | null;
   edit_reason: string | null;
 }
