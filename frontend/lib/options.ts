@@ -1,6 +1,8 @@
 /**
  * Option loaders for <select> fields (FK pickers).
  * Page-size-capped paginated fetches; used by CrudPage and report filters.
+ * `filterRow` (optional) narrows rows after fetching, e.g. only offerings
+ * that are still open so users cannot attach new data to closed courses.
  */
 import { samsRequest } from "@/lib/api";
 
@@ -11,7 +13,12 @@ export interface Option {
 
 type MetaOptionData = { results?: Record<string, unknown>[] };
 
-async function fetchAllPages(basePath: string, labelKeys: string[], valueKey = "id"): Promise<Option[]> {
+async function fetchAllPages(
+  basePath: string,
+  labelKeys: string[],
+  valueKey = "id",
+  filterRow?: (row: Record<string, unknown>) => boolean,
+): Promise<Option[]> {
   const out: Option[] = [];
   let page = 1;
   for (;;) {
@@ -21,6 +28,7 @@ async function fetchAllPages(basePath: string, labelKeys: string[], valueKey = "
     });
     const rows = data.results ?? (Array.isArray(data) ? (data as unknown as Record<string, unknown>[]) : []);
     for (const row of rows) {
+      if (filterRow && !filterRow(row)) continue;
       const label = labelKeys
         .map((k) => row[k])
         .filter((v) => v !== undefined && v !== null && String(v).trim() !== "")
@@ -43,10 +51,20 @@ export type OptionsKey =
   | "academic-terms"
   | "courses"
   | "course-offerings"
+  | "course-offerings-active" // เฉพาะ offering ที่ยังไม่จบภาคเรียน/ยกเลิก
   | "instructors"
   | "students"
   | "enrollments"
   | "schedules";
+
+const OPEN_OFFERING_STATUSES = new Set(["open", "in_progress"]);
+
+/** Label สำหรับ dropdown รายวิชาที่เปิดสอน: รหัสวิชา · ชื่อรายวิชา */
+function offeringOptions(options: { activeOnly: boolean }): Promise<Option[]> {
+  return fetchAllPages("/course-offerings/", ["course_code", "course_name"], "id", (row) =>
+    options.activeOnly ? OPEN_OFFERING_STATUSES.has(String(row.status ?? "")) : true,
+  );
+}
 
 export async function loadOptions(key: OptionsKey): Promise<Option[]> {
   switch (key) {
@@ -59,7 +77,8 @@ export async function loadOptions(key: OptionsKey): Promise<Option[]> {
     case "courses":
       return fetchAllPages("/courses/", ["course_code", "course_name"]);
     case "course-offerings":
-      return fetchAllPages("/course-offerings/", ["course_code", "term_label"]);
+    case "course-offerings-active":
+      return offeringOptions({ activeOnly: key === "course-offerings-active" });
     case "instructors":
       return fetchAllPages("/instructors/", ["employee_code", "first_name", "last_name"]);
     case "students":

@@ -102,7 +102,7 @@ export const enrollmentFields: FieldDef[] = [
     optionsKey: "students",
     placeholder: "พิมพ์รหัสนักศึกษา…",
   },
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings" },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings-active" },
   { name: "enrollment_status", label: "สถานะการลงทะเบียน", type: "select", options: ENROLLMENT_STATUS_OPTIONS, defaultValue: "enrolled" },
 ];
 
@@ -124,7 +124,7 @@ export const enrollmentColumns = [
 
 export const enrollmentFilters = [
   { name: "academic_term", label: "ภาคการศึกษา", optionsKey: "academic-terms" as const },
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", optionsKey: "course-offerings" as const },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", optionsKey: "course-offerings-active" as const },
   { name: "student", label: "นักศึกษา", optionsKey: "students" as const },
   { name: "enrollment_status", label: "สถานะ", options: ENROLLMENT_STATUS_OPTIONS },
 ];
@@ -143,7 +143,7 @@ export function BulkEnrollButton({ refresh }: { refresh: () => void }) {
     setGroup("");
     setOpen(true);
     const [o, g] = await Promise.all([
-      loadOptions("course-offerings").catch(() => []),
+      loadOptions("course-offerings-active").catch(() => []),
       loadOptions("class-groups").catch(() => []),
     ]);
     setOffOpts(o);
@@ -267,7 +267,7 @@ export function BulkEnrollButton({ refresh }: { refresh: () => void }) {
 // ── class schedules ────────────────────────────────────────────────────
 
 export const scheduleFields: FieldDef[] = [
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings" },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", type: "select", required: true, optionsKey: "course-offerings-active" },
   { name: "weekday", label: "วันเรียน", type: "select", required: true, options: WEEKDAY_OPTIONS, defaultValue: "0" },
   { name: "start_time", label: "เวลาเริ่มสอน", type: "time", required: true },
   { name: "end_time", label: "เวลาสิ้นสุด", type: "time", required: true },
@@ -290,7 +290,7 @@ export const scheduleColumns = [
 ];
 
 export const scheduleFilters = [
-  { name: "course_offering", label: "รายวิชาที่เปิดสอน", optionsKey: "course-offerings" as const },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอน", optionsKey: "course-offerings-active" as const },
   { name: "weekday", label: "วันเรียน", options: WEEKDAY_OPTIONS },
   { name: "status", label: "สถานะ", options: SCHEDULE_STATUS_OPTIONS },
 ];

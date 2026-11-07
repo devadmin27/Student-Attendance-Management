@@ -9,7 +9,7 @@ import { formatThaiDate, formatThaiTime, formatThaiDateTime } from "@/lib/format
 import type { AttendanceSession } from "@/lib/types";
 
 const fields: FieldDef[] = [
-  { name: "course_offering", label: "รายวิชาที่เปิดสอนของฉัน", type: "select", required: true, optionsKey: "course-offerings" },
+  { name: "course_offering", label: "รายวิชาที่เปิดสอนของฉัน", type: "select", required: true, optionsKey: "course-offerings-active" },
   { name: "session_date", label: "วันที่เรียน", type: "date", required: true },
   { name: "check_in_start", label: "เวลาเริ่มรับเช็คชื่อ", type: "datetime-local", required: true },
   { name: "check_in_end", label: "เวลาปิดรับเช็คชื่อ", type: "datetime-local", required: true },
