@@ -22,6 +22,19 @@ type ResolvedLocation =
   | { latitude: number; longitude: number; accuracy: number }
   | { status: LocationStatus };
 
+type LocationState = "idle" | "requesting" | "granted" | LocationStatus;
+
+/** Visible feedback so the student can see the system actually asked. */
+const LOCATION_HINT: Record<Exclude<LocationState, "idle">, string> = {
+  requesting: "กำลังขอตำแหน่งอุปกรณ์… (ไม่ให้สิทธิ์ก็เช็คชื่อได้ตามปกติ)",
+  granted: "ได้ตำแหน่งอุปกรณ์แล้ว — จะแนบเป็นหลักฐานตอนเช็คชื่อ",
+  denied:
+    "ไม่ได้รับสิทธิ์ตำแหน่ง — เช็คชื่อได้ตามปกติ (ถ้าต้องการบันทึก ให้เปิดสิทธิ์ตำแหน่งของเว็บนี้ในการตั้งค่าเบราว์เซอร์)",
+  unavailable: "หาตำแหน่งอุปกรณ์ไม่ได้ — เช็คชื่อได้ตามปกติ",
+  unsupported:
+    "อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับการขอตำแหน่ง (ต้องใช้ HTTPS) — เช็คชื่อได้ตามปกติ",
+};
+
 /** Best-effort device position; never throws — resolves a fail-open result. */
 function locate(maxWaitMs = 8000): Promise<ResolvedLocation> {
   if (typeof navigator === "undefined" || !navigator.geolocation) {
@@ -61,8 +74,24 @@ export default function StudentScanPage() {
   const [result, setResult] = useState<CheckInResult | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
+  const [locationState, setLocationState] = useState<LocationState>("idle");
   const scannerRef = useRef<import("html5-qrcode").Html5Qrcode | null>(null);
   const handledRef = useRef(false);
+  // Location lookup kicked off when the user starts scanning; consumed (and
+  // cleared) at submit so every check-in captures a fresh fix. Manual-token
+  // submissions fall back to requesting here if scanning was never started.
+  const locationPromiseRef = useRef<Promise<ResolvedLocation> | null>(null);
+
+  const requestLocation = () => {
+    if (!locationPromiseRef.current) {
+      setLocationState("requesting");
+      locationPromiseRef.current = locate().then((result) => {
+        setLocationState("latitude" in result ? "granted" : result.status);
+        return result;
+      });
+    }
+    return locationPromiseRef.current;
+  };
 
   // Cleanup camera on unmount
   useEffect(
@@ -101,7 +130,8 @@ export default function StudentScanPage() {
     try {
       // Fail-open device-location evidence: a refusal/timeout/unsupported
       // browser resolves a status and the check-in still goes through.
-      const location = await locate();
+      const location = await requestLocation();
+      locationPromiseRef.current = null; // next check-in captures a fresh fix
       const body: Record<string, unknown> = { token };
       if ("latitude" in location) {
         body.latitude = location.latitude;
@@ -134,6 +164,9 @@ export default function StudentScanPage() {
 
   const startScan = async () => {
     setCameraError(null);
+    // Ask for device location right away so the permission prompt appears
+    // while the camera warms up (the fix is consumed at submit time).
+    requestLocation();
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
       const scanner = new Html5Qrcode("qr-reader", { verbose: false });
@@ -206,6 +239,9 @@ export default function StudentScanPage() {
             )}
             {cameraError && <p className="text-center text-xs text-amber-700">{cameraError}</p>}
             {busy && <p className="text-sm text-slate-500">{locating ? "กำลังขอตำแหน่งอุปกรณ์… (ไม่ยินยอมกดเช็คชื่อได้อยู่)" : "กำลังส่งข้อมูลเช็คชื่อ…"}</p>}
+            {!busy && locationState !== "idle" && (
+              <p className="text-center text-xs text-slate-500">{LOCATION_HINT[locationState]}</p>
+            )}
           </div>
         </PageCard>
 
