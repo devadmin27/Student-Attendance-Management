@@ -147,6 +147,14 @@ function AdminLeaveDetailContent() {
               {request.student_code} — {request.student_name}
             </h2>
             <StatusBadge status={request.status} display={request.status_display} />
+            <Link
+              href={`/leaves/${request.id}/print`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              พิมพ์ใบลา
+            </Link>
           </div>
           <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
             <div>

@@ -138,6 +138,14 @@ function InstructorLeaveDetailContent() {
               status={item.request_status}
               display={item.request_status_display}
             />
+            <Link
+              href={`/leaves/${item.leave_request_id}/print`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              พิมพ์ใบลา
+            </Link>
           </div>
           <div className="mt-1 text-sm text-slate-600">
             {item.course_code} — {item.course_name} · ภาค {item.term_label}

@@ -190,6 +190,14 @@ function StudentLeaveDetailContent() {
             ← กลับรายการใบลา
           </Link>
           <span className="ml-auto flex flex-wrap gap-2">
+            <Link
+              href={`/leaves/${request.id}/print`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              พิมพ์ใบลา
+            </Link>
             {request.is_editable && (
               <>
                 <Link

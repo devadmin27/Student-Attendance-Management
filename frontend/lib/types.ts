@@ -327,6 +327,46 @@ export interface LeaveCourseInboxItem {
   is_reviewable: boolean;
 }
 
+// ---- Printable leave document (Phase 3) ----
+export interface LeavePrintCourse {
+  id: string;
+  course_code: string;
+  course_name: string;
+  term_label: string;
+  class_group_name: string | null;
+  instructor_names: string[];
+  schedules: LeaveCourseSchedule[];
+  affected_start_date: string;
+  affected_end_date: string;
+  affected_start_time: string | null;
+  affected_end_time: string | null;
+  review_status: LeaveCourseReviewStatus;
+  review_status_display: string;
+  reviewed_at: string | null;
+  reviews: LeaveCourseReview[];
+}
+
+export interface LeavePrintDocument {
+  id: string;
+  student_code: string;
+  student_name: string;
+  leave_type: LeaveType;
+  leave_type_display: string;
+  start_date: string;
+  end_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  reason: string;
+  status: LeaveRequestStatus;
+  status_display: string;
+  submitted_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  scope: "full" | "course";
+  generated_at: string;
+  courses: LeavePrintCourse[];
+}
+
 export interface AttendanceRecord {
   id: string;
   attendance_session: string;
