@@ -35,6 +35,7 @@ from apps.attendance.serializers import (
     QRTokenSerializer,
     SessionRosterSerializer,
 )
+from apps.leaves.services import leave_status_map_for_session
 from common.permissions import IsAdmin, IsAdminOrInstructor, IsInstructor, RoleRequired
 from common.responses import error_response, success_response
 
@@ -200,6 +201,7 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
         if not self.can_manage(session):
             return error_response("คุณไม่มีสิทธิ์ดูคาบนี้", "PERMISSION_DENIED", 403)
         records = {r.student_id: r for r in session.records.all()}
+        leave_statuses = leave_status_map_for_session(session)
         rows = []
         enrolled = session.course_offering.enrollments.filter(
             enrollment_status="enrolled"
@@ -207,6 +209,7 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
         for e in enrolled:
             s = e.student
             rec = records.get(s.id)
+            leave = leave_statuses.get(str(s.id))
             rows.append({
                 "id": str(s.id),
                 "student_code": s.student_code,
@@ -216,6 +219,13 @@ class AttendanceSessionViewSet(SessionScopeMixin, viewsets.ModelViewSet):
                 # The frontend edits status by record PK; returning it here
                 # avoids an extra /attendance/records/ request on every poll.
                 "record_id": str(rec.id) if rec else None,
+                "leave_status": leave["leave_status"] if leave else None,
+                "leave_status_display": leave["leave_status_display"] if leave else None,
+                "leave_type": leave["leave_type"] if leave else None,
+                "leave_type_display": leave["leave_type_display"] if leave else None,
+                "leave_request_id": leave["leave_request_id"] if leave else None,
+                "leave_course_id": leave["leave_course_id"] if leave else None,
+                "leave_request_count": leave["leave_request_count"] if leave else None,
             })
         rows.sort(key=lambda r: r["student_code"])
         return success_response(

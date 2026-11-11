@@ -106,6 +106,7 @@ INSTALLED_APPS = [
     "apps.courses",
     "apps.schedules",
     "apps.attendance",
+    "apps.leaves",
     "apps.reports",
     "apps.audit",
     "apps.dashboard",

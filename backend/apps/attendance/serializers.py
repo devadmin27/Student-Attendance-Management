@@ -220,3 +220,11 @@ class SessionRosterSerializer(serializers.Serializer):
     checked_in_status = serializers.CharField(read_only=True, allow_null=True)
     checked_in_at = serializers.DateTimeField(read_only=True, allow_null=True)
     record_id = serializers.CharField(read_only=True, allow_null=True)
+    # Leave information is display-only and never mutates attendance.
+    leave_status = serializers.CharField(read_only=True, allow_null=True)
+    leave_status_display = serializers.CharField(read_only=True, allow_null=True)
+    leave_type = serializers.CharField(read_only=True, allow_null=True)
+    leave_type_display = serializers.CharField(read_only=True, allow_null=True)
+    leave_request_id = serializers.CharField(read_only=True, allow_null=True)
+    leave_course_id = serializers.CharField(read_only=True, allow_null=True)
+    leave_request_count = serializers.IntegerField(read_only=True, allow_null=True)
