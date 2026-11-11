@@ -456,3 +456,102 @@ class LeaveAttendanceIntegrationTests(LeaveTestBase):
         self.create_submitted([other.id])
         row = self._roster()
         self.assertIsNone(row["leave_status"])
+
+
+class LeavePrintTests(LeaveTestBase):
+    def _print(self, request_id):
+        return self.client.get(f"/api/v1/leave-requests/{request_id}/print/")
+
+    def test_student_can_print_own_request_only(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+
+        response = self._print(submitted["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        document = response.data["data"]
+        self.assertEqual(document["scope"], "full")
+        self.assertEqual(document["student_code"], "640001")
+        self.assertEqual(document["status_display"], "ส่งคำร้องแล้ว")
+        self.assertTrue(document["generated_at"])
+        self.assertEqual(len(document["courses"]), 1)
+        self.assertTrue(document["courses"][0]["instructor_names"])
+
+        other_user = User.objects.create_user(
+            "s64003", "s3@x.ac.th", "Str0ngStud!Pass", role="student"
+        )
+        other = other_user.student_profile
+        other.student_code = "640003"
+        other.save()
+        self.auth_user(other_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self._print(submitted["id"]).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_admin_can_print_any_request(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self._print(submitted["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["scope"], "full")
+        self.assertEqual(len(response.data["data"]["courses"]), 1)
+
+    def test_instructor_print_is_course_scoped_and_hides_drafts(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        second_user = User.objects.create_user(
+            "teacher3", "t3@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        second = second_user.instructor_profile
+        second.first_name = "อาจารย์"
+        second.last_name = "สาม"
+        second.save()
+        other_offering = self.make_offering("IN20-777", instructor=second)
+        submitted = self.create_submitted([self.offering.id, other_offering.id])
+
+        # Instructor 1 sees only their own course block.
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        response = self._print(submitted["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        document = response.data["data"]
+        self.assertEqual(document["scope"], "course")
+        self.assertEqual(len(document["courses"]), 1)
+        self.assertEqual(document["courses"][0]["course_code"], "IN20-111")
+
+        # Instructor 2 sees only the other course block.
+        self.auth_user(second_user, "Str0ngTeach!Pass")
+        response = self._print(submitted["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            [c["course_code"] for c in response.data["data"]["courses"]],
+            ["IN20-777"],
+        )
+
+        # An unrelated request is not printable.
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        own_only = self.create_submitted()
+        self.auth_user(second_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self._print(own_only["id"]).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        # Drafts never render for instructors.
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft().data["data"]
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self._print(draft["id"]).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_print_requires_login(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.client.credentials()
+        response = self._print(submitted["id"])
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )

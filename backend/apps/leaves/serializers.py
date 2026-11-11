@@ -1,5 +1,6 @@
 """Serializers for leave requests, available courses, and course reviews."""
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.leaves import services
@@ -234,6 +235,128 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
 
     def get_is_reviewable(self, obj):
         return obj.leave_request.status == "submitted"
+
+
+class LeaveCoursePrintSerializer(serializers.ModelSerializer):
+    """Course block for the printable A4 leave document."""
+
+    course_code = serializers.CharField(
+        source="course_offering.course.course_code", read_only=True
+    )
+    course_name = serializers.CharField(
+        source="course_offering.course.course_name", read_only=True
+    )
+    term_label = serializers.SerializerMethodField()
+    class_group_name = serializers.SerializerMethodField()
+    instructor_names = serializers.SerializerMethodField()
+    schedules = serializers.SerializerMethodField()
+    review_status_display = serializers.CharField(
+        source="get_review_status_display", read_only=True
+    )
+    reviews = LeaveCourseReviewSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = LeaveCourse
+        fields = [
+            "id", "course_code", "course_name", "term_label", "class_group_name",
+            "instructor_names", "schedules",
+            "affected_start_date", "affected_end_date",
+            "affected_start_time", "affected_end_time",
+            "review_status", "review_status_display", "reviewed_at", "reviews",
+        ]
+        read_only_fields = fields
+
+    def get_term_label(self, obj):
+        term = obj.course_offering.academic_term
+        return f"{term.academic_year}/{term.semester}"
+
+    def get_class_group_name(self, obj):
+        group = obj.course_offering.class_group
+        return group.group_name if group else None
+
+    def get_instructor_names(self, obj):
+        offering = obj.course_offering
+        names: list[str] = []
+        if offering.instructor_id:
+            profile = offering.instructor
+            names.append(f"{profile.first_name} {profile.last_name}".strip())
+        for profile in offering.instructors.all():
+            name = f"{profile.first_name} {profile.last_name}".strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def get_schedules(self, obj):
+        return [
+            {
+                "weekday": schedule.weekday,
+                "weekday_display": schedule.get_weekday_display(),
+                "start_time": schedule.start_time.strftime("%H:%M"),
+                "end_time": schedule.end_time.strftime("%H:%M"),
+                "classroom": schedule.classroom,
+            }
+            for schedule in obj.course_offering.schedules.all()
+            if schedule.status != "cancelled"
+        ]
+
+
+class LeaveRequestPrintSerializer(serializers.ModelSerializer):
+    """Printable A4 document payload.
+
+    `scope` is "full" for the student/admin copy and "course" for an
+    instructor, whose copy only contains the offerings they teach.
+    """
+
+    student_code = serializers.CharField(source="student.student_code", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    leave_type_display = serializers.CharField(
+        source="get_leave_type_display", read_only=True
+    )
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    scope = serializers.SerializerMethodField()
+    generated_at = serializers.SerializerMethodField()
+    courses = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            "id", "student_code", "student_name",
+            "leave_type", "leave_type_display",
+            "start_date", "end_date", "start_time", "end_time",
+            "reason", "status", "status_display",
+            "submitted_at", "cancelled_at", "created_at",
+            "scope", "generated_at", "courses",
+        ]
+        read_only_fields = fields
+
+    def get_student_name(self, obj):
+        return f"{obj.student.first_name} {obj.student.last_name}".strip()
+
+    def get_scope(self, obj):
+        return self.context.get("scope", "full")
+
+    def get_generated_at(self, obj):
+        return timezone.localtime(timezone.now()).isoformat()
+
+    def get_courses(self, obj):
+        courses = list(obj.courses.all())
+        if self.context.get("scope") == "course":
+            request = self.context.get("request")
+            profile = getattr(
+                getattr(request, "user", None), "instructor_profile", None
+            )
+            if profile is None:
+                return []
+            profile_id = profile.id
+            courses = [
+                course for course in courses
+                if course.course_offering.instructor_id == profile_id
+                or any(
+                    instructor.id == profile_id
+                    for instructor in course.course_offering.instructors.all()
+                )
+            ]
+        return LeaveCoursePrintSerializer(courses, many=True).data
 
 
 class LeaveCourseReviewWriteSerializer(serializers.Serializer):

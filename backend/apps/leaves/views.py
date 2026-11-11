@@ -3,11 +3,14 @@
 RBAC is enforced here (and in the service layer), never by the SPA alone.
 """
 from django.db.models import Q
+from django.http import Http404
+from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date, parse_time
 from rest_framework import status, viewsets
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.views import APIView
 
 from apps.audit.models import log_audit
 from apps.leaves import services
@@ -15,6 +18,7 @@ from apps.leaves.models import LeaveCourse, LeaveRequest
 from apps.leaves.serializers import (
     LeaveCourseInboxSerializer,
     LeaveCourseReviewWriteSerializer,
+    LeaveRequestPrintSerializer,
     LeaveRequestSerializer,
     LeaveRequestWriteSerializer,
 )
@@ -296,3 +300,59 @@ class LeaveCourseViewSet(viewsets.GenericViewSet):
             instance, context={"request": request}
         ).data
         return success_response(data, "บันทึกผลการพิจารณารายวิชาสำเร็จ")
+
+
+class LeaveRequestPrintView(APIView):
+    """Read-only A4 document data for students, instructors, and admins.
+
+    Students may print only their own request, admins may print any request,
+    and instructors may print requests that include an offering they teach
+    (drafts stay hidden). An instructor's payload is scoped to their own
+    courses so other instructors' comments are never exposed.
+    """
+
+    permission_classes = [RoleRequired]
+    allowed_roles = {"student", "instructor", "admin"}
+
+    def get(self, request, pk):
+        queryset = LeaveRequest.objects.select_related("student").prefetch_related(
+            "courses",
+            "courses__course_offering__course",
+            "courses__course_offering__academic_term",
+            "courses__course_offering__class_group",
+            "courses__course_offering__instructor",
+            "courses__course_offering__instructors",
+            "courses__course_offering__schedules",
+            "courses__reviews",
+            "courses__reviews__reviewer",
+            "courses__reviews__reviewer__instructor_profile",
+        )
+        role = request.user.role
+        if role == "admin":
+            instance = get_object_or_404(queryset, pk=pk)
+            scope = "full"
+        elif role == "student":
+            profile = getattr(request.user, "student_profile", None)
+            if profile is None:
+                raise Http404
+            instance = get_object_or_404(queryset, pk=pk, student=profile)
+            scope = "full"
+        else:
+            profile = getattr(request.user, "instructor_profile", None)
+            if profile is None:
+                raise Http404
+            instance = get_object_or_404(
+                queryset.exclude(status="draft")
+                .filter(
+                    Q(courses__course_offering__instructor=profile)
+                    | Q(courses__course_offering__instructors=profile)
+                )
+                .distinct(),
+                pk=pk,
+            )
+            scope = "course"
+
+        serializer = LeaveRequestPrintSerializer(
+            instance, context={"request": request, "scope": scope}
+        )
+        return success_response(serializer.data, "โหลดเอกสารใบลาสำเร็จ")
