@@ -46,6 +46,17 @@ const BADGE_TONES: Record<string, string> = {
   planned: "bg-slate-100 text-slate-700",
   suspended: "bg-amber-100 text-amber-800",
   inactive: "bg-slate-100 text-slate-600",
+  draft: "bg-slate-100 text-slate-700",
+  submitted: "bg-blue-100 text-blue-800",
+  pending_advisor_review: "bg-amber-100 text-amber-800",
+  pending_program_head_review: "bg-amber-100 text-amber-800",
+  pending_final_approval: "bg-amber-100 text-amber-800",
+  approved: "bg-emerald-100 text-emerald-800",
+  rejected: "bg-red-100 text-red-800",
+  returned: "bg-orange-100 text-orange-800",
+  pending: "bg-amber-100 text-amber-800",
+  reviewed: "bg-sky-100 text-sky-800",
+  acknowledged: "bg-emerald-100 text-emerald-800",
 };
 
 const THAI_LABELS: Record<string, string> = {
@@ -66,6 +77,17 @@ const THAI_LABELS: Record<string, string> = {
   planned: "กำหนดการ",
   suspended: "ระงับ",
   inactive: "ไม่ใช้งาน",
+  draft: "แบบร่าง",
+  submitted: "ส่งคำร้องแล้ว",
+  pending_advisor_review: "รอความเห็นอาจารย์ที่ปรึกษา",
+  pending_program_head_review: "รอความเห็นหัวหน้าหน่วยหลักสูตร",
+  pending_final_approval: "รอผู้มีอำนาจอนุมัติ",
+  approved: "อนุญาต",
+  rejected: "ไม่อนุญาต",
+  returned: "ส่งกลับเพื่อแก้ไข",
+  pending: "รอการพิจารณา",
+  reviewed: "ให้ความเห็นแล้ว",
+  acknowledged: "รับทราบ",
 };
 
 export function StatusBadge({ status, display }: { status: string; display?: string }) {

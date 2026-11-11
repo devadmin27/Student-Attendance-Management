@@ -189,6 +189,142 @@ export interface RosterRow {
   checked_in_status: AttendanceStatus | null;
   checked_in_at: string | null;
   record_id: string | null;
+  /** Display-only leave projection — never changes checked_in_status. */
+  leave_status: LeaveRequestStatus | null;
+  leave_status_display: string | null;
+  leave_type: LeaveType | null;
+  leave_type_display: string | null;
+  leave_request_id: string | null;
+  leave_course_id: string | null;
+  leave_request_count: number | null;
+}
+
+// ---- Student leave (Phase 1) ----
+export type LeaveType = "sick" | "personal" | "other";
+export type LeaveRequestStatus =
+  | "draft"
+  | "submitted"
+  | "pending_advisor_review"
+  | "pending_program_head_review"
+  | "pending_final_approval"
+  | "approved"
+  | "rejected"
+  | "returned"
+  | "cancelled";
+export type LeaveCourseReviewStatus =
+  | "pending"
+  | "reviewed"
+  | "acknowledged"
+  | "rejected";
+
+export interface LeaveCourseSchedule {
+  weekday: number;
+  weekday_display: string;
+  start_time: string;
+  end_time: string;
+  classroom: string;
+}
+
+export interface LeaveCourseReview {
+  id: string;
+  review_status: Exclude<LeaveCourseReviewStatus, "pending">;
+  review_status_display: string;
+  comment: string;
+  reviewer: string;
+  reviewer_username: string;
+  reviewer_name: string;
+  created_at: string;
+}
+
+export interface LeaveCourse {
+  id: string;
+  course_offering: string;
+  course_code: string;
+  course_name: string;
+  term_label: string;
+  class_group_name: string | null;
+  schedules: LeaveCourseSchedule[];
+  affected_start_date: string;
+  affected_end_date: string;
+  affected_start_time: string | null;
+  affected_end_time: string | null;
+  review_status: LeaveCourseReviewStatus;
+  review_status_display: string;
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  reviews: LeaveCourseReview[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeaveRequest {
+  id: string;
+  student: string;
+  student_code: string;
+  student_name: string;
+  leave_type: LeaveType;
+  leave_type_display: string;
+  start_date: string;
+  end_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  reason: string;
+  status: LeaveRequestStatus;
+  status_display: string;
+  submitted_at: string | null;
+  cancelled_at: string | null;
+  course_count: number;
+  courses: LeaveCourse[];
+  is_editable: boolean;
+  is_cancellable: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AvailableLeaveCourse {
+  id: string;
+  course_code: string;
+  course_name: string;
+  term_label: string;
+  class_group_name: string | null;
+  schedules: LeaveCourseSchedule[];
+  has_class_in_period: boolean;
+  affected_count: number;
+  affected_dates: string[];
+  affected_classes: (LeaveCourseSchedule & { date: string })[];
+}
+
+export interface LeaveCourseInboxItem {
+  id: string;
+  leave_request_id: string;
+  request_status: LeaveRequestStatus;
+  request_status_display: string;
+  student_code: string;
+  student_name: string;
+  leave_type: LeaveType;
+  leave_type_display: string;
+  start_date: string;
+  end_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  reason: string;
+  submitted_at: string | null;
+  course_offering: string;
+  course_code: string;
+  course_name: string;
+  term_label: string;
+  class_group_name: string | null;
+  affected_start_date: string;
+  affected_end_date: string;
+  affected_start_time: string | null;
+  affected_end_time: string | null;
+  review_status: LeaveCourseReviewStatus;
+  review_status_display: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  reviews: LeaveCourseReview[];
+  is_reviewable: boolean;
 }
 
 export interface AttendanceRecord {

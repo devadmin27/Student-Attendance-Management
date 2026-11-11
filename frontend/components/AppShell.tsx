@@ -23,6 +23,7 @@ const ADMIN_MENU: MenuItem[] = [
   { href: "/admin/schedules", label: "จัดการตารางเรียน", icon: "⏰" },
   { href: "/admin/attendance-sessions", label: "คาบเรียนเช็คชื่อ", icon: "🟢" },
   { href: "/admin/attendance-records", label: "รายการเช็คชื่อ", icon: "✅" },
+  { href: "/admin/leaves", label: "คำร้องลานักศึกษา", icon: "📝" },
   { href: "/admin/reports", label: "รายงานการเข้าเรียน", icon: "📈" },
   { href: "/admin/audit-logs", label: "Audit Logs", icon: "📝" },
 ];
@@ -30,6 +31,7 @@ const ADMIN_MENU: MenuItem[] = [
 const INSTRUCTOR_MENU: MenuItem[] = [
   { href: "/instructor/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/instructor/attendance", label: "เปิดเช็คชื่อ", icon: "🟢" },
+  { href: "/instructor/leaves", label: "คำร้องลาในรายวิชา", icon: "📝" },
   { href: "/instructor/course-offerings", label: "จัดการเปิดสอนรายวิชา", icon: "📚" },
   { href: "/instructor/enrollments", label: "จัดการการลงทะเบียน", icon: "🗒️" },
   { href: "/instructor/schedules", label: "จัดการตารางเรียน", icon: "⏰" },
@@ -42,6 +44,7 @@ const STUDENT_MENU: MenuItem[] = [
   { href: "/student/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/student/scan", label: "สแกน QR Code", icon: "📷" },
   { href: "/student/courses", label: "รายวิชาที่ลงทะเบียน", icon: "📘" },
+  { href: "/student/leaves", label: "ใบลาของฉัน", icon: "📝" },
   { href: "/student/schedule", label: "ตารางเรียน", icon: "⏰" },
   { href: "/student/history", label: "ประวัติการเช็คชื่อ", icon: "✅" },
   { href: "/student/profile", label: "โปรไฟล์", icon: "👤" },
