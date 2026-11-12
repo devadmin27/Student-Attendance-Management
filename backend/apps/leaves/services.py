@@ -5,14 +5,138 @@ only asks for a leave-status map and displays it alongside (never instead of)
 the attendance status (spec §5.2).
 """
 from datetime import date, time, timedelta
+from pathlib import Path
 
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import StudentProfile
 from apps.attendance.models import AttendanceSession
 from apps.courses.models import Enrollment
-from apps.leaves.models import LeaveCourse, LeaveCourseReview, LeaveRequest
+from apps.leaves.models import (
+    LeaveAttachment,
+    LeaveCourse,
+    LeaveCourseReview,
+    LeaveRequest,
+)
+
+
+# ---------------------------------------------------------------------------
+# Submission policy (Phase 4)
+# ---------------------------------------------------------------------------
+def leave_policy() -> dict:
+    """Policy payload for the SPA — thresholds live in Django settings only."""
+    return {
+        "personal_advance_days": settings.LEAVE_PERSONAL_ADVANCE_DAYS,
+        "sick_normal_grace_days": settings.LEAVE_SICK_NORMAL_GRACE_DAYS,
+        "sick_late_grace_days": settings.LEAVE_SICK_LATE_GRACE_DAYS,
+        "medical_certificate_min_days": settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS,
+        "max_attachment_bytes": settings.LEAVE_ATTACHMENT_MAX_BYTES,
+        "max_attachment_count": settings.LEAVE_ATTACHMENT_MAX_COUNT,
+        "allowed_attachment_extensions": settings.LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS,
+        "allowed_attachment_content_types": (
+            settings.LEAVE_ATTACHMENT_ALLOWED_CONTENT_TYPES
+        ),
+        "server_date": timezone.localdate().isoformat(),
+    }
+
+
+def submission_deadlines(
+    leave_type: str,
+    start_date: date,
+    end_date: date,
+) -> tuple[date | None, date | None]:
+    """Return (normal deadline, late-grace deadline) for a request.
+
+    - personal: must be filed on or before start_date − advance_days.
+    - sick: normal deadline is end_date + normal grace (day after the leave);
+      the late-grace deadline is end_date + late grace.
+    - other: no timing restriction.
+    """
+    if leave_type == "personal":
+        return (
+            start_date - timedelta(days=settings.LEAVE_PERSONAL_ADVANCE_DAYS),
+            None,
+        )
+    if leave_type == "sick":
+        return (
+            end_date + timedelta(days=settings.LEAVE_SICK_NORMAL_GRACE_DAYS),
+            end_date + timedelta(days=settings.LEAVE_SICK_LATE_GRACE_DAYS),
+        )
+    return None, None
+
+
+def requires_medical_certificate(leave_request: LeaveRequest) -> bool:
+    return (
+        leave_request.leave_type == "sick"
+        and leave_request.total_days
+        >= settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS
+    )
+
+
+def validate_submission_timing(
+    leave_request: LeaveRequest,
+    today: date | None = None,
+) -> None:
+    """Enforce the college's advance/retroactive submission window.
+
+    Personal leave must be submitted at least N days before it starts. Sick
+    leave may be submitted up to the day after it ends; a short grace period
+    after that is still accepted when a late-submission reason is supplied.
+    """
+    if leave_request.leave_type not in ("personal", "sick"):
+        return
+    today = today or timezone.localdate()
+    normal_deadline, grace_deadline = submission_deadlines(
+        leave_request.leave_type,
+        leave_request.start_date,
+        leave_request.end_date,
+    )
+    if leave_request.leave_type == "personal":
+        if normal_deadline is not None and today > normal_deadline:
+            raise ValidationError(
+                {"start_date": [
+                    "ลากิจส่วนตัวต้องส่งล่วงหน้าอย่างน้อย "
+                    f"{settings.LEAVE_PERSONAL_ADVANCE_DAYS} วัน "
+                    f"(ภายใน {normal_deadline.strftime('%d/%m/%Y')})"
+                ]}
+            )
+        return
+
+    if grace_deadline is not None and today > grace_deadline:
+        raise ValidationError(
+            {"end_date": [
+                "เลยกำหนดส่งใบลาป่วยแล้ว — ส่งได้ไม่เกิน "
+                f"{settings.LEAVE_SICK_LATE_GRACE_DAYS} วันหลังวันสิ้นสุดการลา "
+                f"(ภายใน {grace_deadline.strftime('%d/%m/%Y')})"
+            ]}
+        )
+    if (
+        normal_deadline is not None
+        and today > normal_deadline
+        and not (leave_request.late_submission_reason or "").strip()
+    ):
+        raise ValidationError(
+            {"late_submission_reason": [
+                "ส่งใบลาป่วยเกินกำหนดปกติแล้ว กรุณาระบุเหตุผลการส่งย้อนหลัง"
+            ]}
+        )
+
+
+def validate_medical_certificate(leave_request: LeaveRequest) -> None:
+    if not requires_medical_certificate(leave_request):
+        return
+    if not leave_request.attachments.filter(
+        attachment_type="medical_certificate"
+    ).exists():
+        raise ValidationError(
+            {"attachments": [
+                "ลาป่วยตั้งแต่ "
+                f"{settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS} วันขึ้นไป "
+                "ต้องแนบใบรับรองแพทย์ก่อนส่งคำร้อง"
+            ]}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +350,8 @@ def submit_leave_request(leave_request: LeaveRequest) -> LeaveRequest:
         leave_request.start_time,
         leave_request.end_time,
     )
+    validate_submission_timing(leave_request)
+    validate_medical_certificate(leave_request)
     leave_request.status = "submitted"
     leave_request.submitted_at = timezone.now()
     leave_request.save(update_fields=["status", "submitted_at", "updated_at"])
@@ -239,6 +365,57 @@ def cancel_leave_request(leave_request: LeaveRequest) -> LeaveRequest:
     leave_request.cancelled_at = timezone.now()
     leave_request.save(update_fields=["status", "cancelled_at", "updated_at"])
     return leave_request
+
+
+# ---------------------------------------------------------------------------
+# Attachments (private files)
+# ---------------------------------------------------------------------------
+def create_leave_attachment(
+    leave_request: LeaveRequest,
+    uploaded_file,
+    attachment_type: str,
+    uploaded_by,
+) -> LeaveAttachment:
+    """Store one attachment for a draft request.
+
+    The serializer validates extension/size; this service adds the business
+    rules (draft-only, attachment count cap) and records metadata.
+    """
+    if leave_request.status != "draft":
+        raise ValidationError(
+            {"status": ["แนบไฟล์ได้เฉพาะคำร้องที่เป็นแบบร่าง"]}
+        )
+    if (
+        leave_request.attachments.count()
+        >= settings.LEAVE_ATTACHMENT_MAX_COUNT
+    ):
+        raise ValidationError(
+            {"file": [
+                "แนบไฟล์ได้ไม่เกิน "
+                f"{settings.LEAVE_ATTACHMENT_MAX_COUNT} ไฟล์ต่อคำร้อง"
+            ]}
+        )
+    return LeaveAttachment.objects.create(
+        leave_request=leave_request,
+        attachment_type=attachment_type,
+        file=uploaded_file,
+        original_name=Path(uploaded_file.name).name[:255],
+        content_type=(getattr(uploaded_file, "content_type", "") or "")[:100],
+        size=uploaded_file.size,
+        uploaded_by=uploaded_by,
+    )
+
+
+def delete_leave_attachment(
+    leave_request: LeaveRequest,
+    attachment: LeaveAttachment,
+) -> None:
+    if leave_request.status != "draft":
+        raise ValidationError(
+            {"status": ["ลบไฟล์แนบได้เฉพาะคำร้องที่เป็นแบบร่าง"]}
+        )
+    attachment.file.delete(save=False)
+    attachment.delete()
 
 
 # ---------------------------------------------------------------------------

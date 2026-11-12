@@ -1,12 +1,19 @@
 """Serializers for leave requests, available courses, and course reviews."""
 import re
+from pathlib import Path
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from apps.leaves import services
-from apps.leaves.models import LeaveCourse, LeaveCourseReview, LeaveRequest
+from apps.leaves.models import (
+    LeaveAttachment,
+    LeaveCourse,
+    LeaveCourseReview,
+    LeaveRequest,
+)
 
 
 class LeaveCourseReviewSerializer(serializers.ModelSerializer):
@@ -86,6 +93,65 @@ class LeaveCourseSerializer(serializers.ModelSerializer):
         return f"{profile.first_name} {profile.last_name}".strip()
 
 
+class LeaveAttachmentSerializer(serializers.ModelSerializer):
+    """Read-only attachment metadata. The file itself is never exposed."""
+
+    attachment_type_display = serializers.CharField(
+        source="get_attachment_type_display", read_only=True
+    )
+    uploaded_by_name = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveAttachment
+        fields = [
+            "id", "attachment_type", "attachment_type_display",
+            "original_name", "content_type", "size",
+            "uploaded_by", "uploaded_by_name", "download_url", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_uploaded_by_name(self, obj):
+        if obj.uploaded_by_id is None:
+            return None
+        return obj.uploaded_by.get_full_name() or obj.uploaded_by.username
+
+    def get_download_url(self, obj):
+        return (
+            f"/leave-requests/{obj.leave_request_id}/attachments/"
+            f"{obj.id}/download/"
+        )
+
+
+class LeaveAttachmentWriteSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    attachment_type = serializers.ChoiceField(
+        choices=LeaveAttachment.TYPE_CHOICES,
+        required=False,
+        default="medical_certificate",
+    )
+
+    def validate_file(self, value):
+        suffix = Path(value.name).suffix.lower().lstrip(".")
+        if suffix not in settings.LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS:
+            allowed = ", ".join(settings.LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS)
+            raise serializers.ValidationError(
+                f"ชนิดไฟล์ไม่รองรับ — รองรับเฉพาะ {allowed}"
+            )
+        if value.size > settings.LEAVE_ATTACHMENT_MAX_BYTES:
+            max_mb = settings.LEAVE_ATTACHMENT_MAX_BYTES / (1024 * 1024)
+            raise serializers.ValidationError(
+                f"ไฟล์มีขนาดใหญ่เกินกำหนด (สูงสุด {max_mb:g} MB)"
+            )
+        content_type = (getattr(value, "content_type", "") or "").lower()
+        allowed_types = set(settings.LEAVE_ATTACHMENT_ALLOWED_CONTENT_TYPES)
+        if content_type and content_type not in allowed_types | {
+            "application/octet-stream"
+        }:
+            raise serializers.ValidationError("ชนิดไฟล์ไม่ตรงกับนามสกุลที่รองรับ")
+        return value
+
+
 class LeaveRequestSerializer(serializers.ModelSerializer):
     student_code = serializers.CharField(source="student.student_code", read_only=True)
     student_name = serializers.SerializerMethodField()
@@ -101,6 +167,11 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     total_days = serializers.IntegerField(read_only=True)
     courses = LeaveCourseSerializer(many=True, read_only=True)
     course_count = serializers.IntegerField(source="courses.count", read_only=True)
+    attachments = LeaveAttachmentSerializer(many=True, read_only=True)
+    requires_medical_certificate = serializers.SerializerMethodField()
+    medical_certificate_attached = serializers.SerializerMethodField()
+    submission_deadline = serializers.SerializerMethodField()
+    submission_grace_deadline = serializers.SerializerMethodField()
     is_editable = serializers.BooleanField(read_only=True)
     is_cancellable = serializers.BooleanField(read_only=True)
 
@@ -111,11 +182,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "student_program_name", "student_class_group_name", "student_year_level",
             "leave_type", "leave_type_display",
             "start_date", "end_date", "start_time", "end_time", "total_days",
-            "reason",
+            "reason", "late_submission_reason",
             "contact_phone", "line_id", "address_during_leave",
             "guardian_acknowledged", "guardian_phone", "guardian_address",
             "status", "status_display",
             "submitted_at", "cancelled_at",
+            "attachments", "requires_medical_certificate",
+            "medical_certificate_attached",
+            "submission_deadline", "submission_grace_deadline",
             "course_count", "courses", "is_editable", "is_cancellable",
             "created_at", "updated_at",
         ]
@@ -132,6 +206,27 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         group = obj.student.class_group
         return group.group_name if group else None
 
+    def get_requires_medical_certificate(self, obj):
+        return services.requires_medical_certificate(obj)
+
+    def get_medical_certificate_attached(self, obj):
+        return any(
+            attachment.attachment_type == "medical_certificate"
+            for attachment in obj.attachments.all()
+        )
+
+    def get_submission_deadline(self, obj):
+        normal, _ = services.submission_deadlines(
+            obj.leave_type, obj.start_date, obj.end_date
+        )
+        return normal.isoformat() if normal else None
+
+    def get_submission_grace_deadline(self, obj):
+        _, grace = services.submission_deadlines(
+            obj.leave_type, obj.start_date, obj.end_date
+        )
+        return grace.isoformat() if grace else None
+
 
 class LeaveRequestWriteSerializer(serializers.ModelSerializer):
     """Create/update a draft. Status and ownership are server-controlled."""
@@ -145,7 +240,7 @@ class LeaveRequestWriteSerializer(serializers.ModelSerializer):
         model = LeaveRequest
         fields = [
             "leave_type", "start_date", "end_date", "start_time", "end_time",
-            "reason",
+            "reason", "late_submission_reason",
             "contact_phone", "line_id", "address_during_leave",
             "guardian_acknowledged", "guardian_phone", "guardian_address",
             "course_offering_ids",
@@ -219,9 +314,17 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
         source="leave_request.end_time", read_only=True, allow_null=True
     )
     reason = serializers.CharField(source="leave_request.reason", read_only=True)
+    late_submission_reason = serializers.CharField(
+        source="leave_request.late_submission_reason", read_only=True
+    )
     submitted_at = serializers.DateTimeField(
         source="leave_request.submitted_at", read_only=True, allow_null=True
     )
+    attachments = LeaveAttachmentSerializer(
+        source="leave_request.attachments", many=True, read_only=True
+    )
+    requires_medical_certificate = serializers.SerializerMethodField()
+    medical_certificate_attached = serializers.SerializerMethodField()
     course_code = serializers.CharField(
         source="course_offering.course.course_code", read_only=True
     )
@@ -242,7 +345,10 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
             "id", "leave_request_id", "request_status", "request_status_display",
             "student_code", "student_name", "leave_type", "leave_type_display",
             "start_date", "end_date", "start_time", "end_time", "reason",
-            "submitted_at", "course_offering", "course_code", "course_name",
+            "late_submission_reason", "submitted_at",
+            "attachments", "requires_medical_certificate",
+            "medical_certificate_attached",
+            "course_offering", "course_code", "course_name",
             "term_label", "class_group_name",
             "affected_start_date", "affected_end_date",
             "affected_start_time", "affected_end_time",
@@ -265,6 +371,15 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
 
     def get_is_reviewable(self, obj):
         return obj.leave_request.status == "submitted"
+
+    def get_requires_medical_certificate(self, obj):
+        return services.requires_medical_certificate(obj.leave_request)
+
+    def get_medical_certificate_attached(self, obj):
+        return any(
+            attachment.attachment_type == "medical_certificate"
+            for attachment in obj.leave_request.attachments.all()
+        )
 
 
 class LeaveCoursePrintSerializer(serializers.ModelSerializer):
@@ -352,6 +467,9 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
     scope = serializers.SerializerMethodField()
     generated_at = serializers.SerializerMethodField()
     courses = serializers.SerializerMethodField()
+    attachments = LeaveAttachmentSerializer(many=True, read_only=True)
+    requires_medical_certificate = serializers.SerializerMethodField()
+    medical_certificate_attached = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -360,12 +478,14 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
             "student_program_name", "student_class_group_name", "student_year_level",
             "leave_type", "leave_type_display",
             "start_date", "end_date", "start_time", "end_time", "total_days",
-            "reason",
+            "reason", "late_submission_reason",
             "contact_phone", "line_id", "address_during_leave",
             "guardian_acknowledged", "guardian_phone", "guardian_address",
             "status", "status_display",
             "submitted_at", "cancelled_at", "created_at",
             "scope", "generated_at", "courses",
+            "attachments", "requires_medical_certificate",
+            "medical_certificate_attached",
         ]
         read_only_fields = fields
 
@@ -385,6 +505,15 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
 
     def get_generated_at(self, obj):
         return timezone.localtime(timezone.now()).isoformat()
+
+    def get_requires_medical_certificate(self, obj):
+        return services.requires_medical_certificate(obj)
+
+    def get_medical_certificate_attached(self, obj):
+        return any(
+            attachment.attachment_type == "medical_certificate"
+            for attachment in obj.attachments.all()
+        )
 
     def get_courses(self, obj):
         courses = list(obj.courses.all())

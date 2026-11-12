@@ -3,19 +3,22 @@
 RBAC is enforced here (and in the service layer), never by the SPA alone.
 """
 from django.db.models import Q
-from django.http import Http404
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date, parse_time
 from rest_framework import status, viewsets
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.views import APIView
 
 from apps.audit.models import log_audit
 from apps.leaves import services
-from apps.leaves.models import LeaveCourse, LeaveRequest
+from apps.leaves.models import LeaveAttachment, LeaveCourse, LeaveRequest
 from apps.leaves.serializers import (
+    LeaveAttachmentSerializer,
+    LeaveAttachmentWriteSerializer,
     LeaveCourseInboxSerializer,
     LeaveCourseReviewWriteSerializer,
     LeaveRequestPrintSerializer,
@@ -62,6 +65,7 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
             "courses__reviews__reviewer__instructor_profile",
             "courses__reviewed_by",
             "courses__reviewed_by__instructor_profile",
+            "attachments",
         )
         user = self.request.user
         if user.role == "admin":
@@ -171,6 +175,68 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
         data = LeaveRequestSerializer(instance, context={"request": request}).data
         return success_response(data, "ยกเลิกคำร้องลาสำเร็จ")
 
+    @action(detail=True, methods=["get", "post"], url_path="attachments")
+    def attachments(self, request, pk=None):
+        """List (owner/admin) or upload (owner, draft only) attachments."""
+        instance = self.get_object()
+        if request.method.lower() == "get":
+            serializer = LeaveAttachmentSerializer(
+                instance.attachments.all(), many=True
+            )
+            return success_response(serializer.data, "โหลดไฟล์แนบสำเร็จ")
+
+        if request.user.role != "student":
+            return error_response(
+                "ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว", "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+        serializer = LeaveAttachmentWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        attachment = services.create_leave_attachment(
+            instance,
+            serializer.validated_data["file"],
+            serializer.validated_data["attachment_type"],
+            request.user,
+        )
+        log_audit(
+            request.user, "leave_attachment_upload", "leave_attachment",
+            attachment.pk,
+            metadata={
+                "leave_request": str(instance.pk),
+                "attachment_type": attachment.attachment_type,
+                "size": attachment.size,
+            },
+            request=request,
+        )
+        return success_response(
+            LeaveAttachmentSerializer(attachment).data,
+            "แนบไฟล์สำเร็จ",
+            status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"attachments/(?P<attachment_id>[^/.]+)",
+    )
+    def delete_attachment(self, request, pk=None, attachment_id=None):
+        if request.user.role != "student":
+            return error_response(
+                "ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว", "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+        instance = self.get_object()
+        attachment = get_object_or_404(
+            instance.attachments.all(), pk=attachment_id
+        )
+        services.delete_leave_attachment(instance, attachment)
+        log_audit(
+            request.user, "leave_attachment_delete", "leave_attachment",
+            attachment_id,
+            metadata={"leave_request": str(instance.pk)}, request=request,
+        )
+        return success_response(None, "ลบไฟล์แนบสำเร็จ")
+
     @action(detail=False, methods=["get"], url_path="available-courses")
     def available_courses(self, request):
         if request.user.role != "student":
@@ -241,6 +307,7 @@ class LeaveCourseViewSet(viewsets.GenericViewSet):
             "reviews", "reviews__reviewer",
             "reviews__reviewer__instructor_profile",
             "course_offering__instructors",
+            "leave_request__attachments",
         )
         user = self.request.user
         if user.role == "admin":
@@ -330,6 +397,7 @@ class LeaveRequestPrintView(APIView):
             "courses__reviews",
             "courses__reviews__reviewer",
             "courses__reviews__reviewer__instructor_profile",
+            "attachments",
         )
         role = request.user.role
         if role == "admin":
@@ -360,3 +428,64 @@ class LeaveRequestPrintView(APIView):
             instance, context={"request": request, "scope": scope}
         )
         return success_response(serializer.data, "โหลดเอกสารใบลาสำเร็จ")
+
+
+class LeavePolicyView(APIView):
+    """Current submission policy, so the SPA never hardcodes college rules."""
+
+    permission_classes = [RoleRequired]
+    allowed_roles = {"student", "instructor", "admin"}
+
+    def get(self, request):
+        return success_response(services.leave_policy(), "โหลดนโยบายการลาสำเร็จ")
+
+
+class LeaveAttachmentDownloadView(APIView):
+    """Authenticated download with the same role scoping as the request.
+
+    Students may download their own files, admins any file, and instructors
+    only files on submitted requests that include one of their courses.
+    """
+
+    permission_classes = [RoleRequired]
+    allowed_roles = {"student", "instructor", "admin"}
+
+    def get(self, request, pk, attachment_id):
+        queryset = LeaveAttachment.objects.select_related("leave_request")
+        role = request.user.role
+        if role == "student":
+            profile = getattr(request.user, "student_profile", None)
+            if profile is None:
+                raise Http404
+            queryset = queryset.filter(leave_request__student=profile)
+        elif role == "instructor":
+            profile = getattr(request.user, "instructor_profile", None)
+            if profile is None:
+                raise Http404
+            queryset = (
+                queryset.exclude(leave_request__status="draft")
+                .filter(
+                    Q(leave_request__courses__course_offering__instructor=profile)
+                    | Q(
+                        leave_request__courses__course_offering__instructors=profile
+                    )
+                )
+                .distinct()
+            )
+
+        attachment = get_object_or_404(
+            queryset, pk=attachment_id, leave_request_id=pk
+        )
+        try:
+            file_handle = attachment.file.open("rb")
+        except FileNotFoundError:
+            raise Http404
+
+        response = FileResponse(
+            file_handle,
+            as_attachment=True,
+            filename=attachment.original_name,
+        )
+        if attachment.content_type:
+            response["Content-Type"] = attachment.content_type
+        return response

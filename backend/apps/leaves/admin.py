@@ -2,6 +2,7 @@
 from django.contrib import admin
 
 from apps.leaves.models import (
+    LeaveAttachment,
     LeaveCourse,
     LeaveCourseReview,
     LeaveRequest,
@@ -15,6 +16,12 @@ class LeaveCourseInline(admin.TabularInline):
     readonly_fields = ["review_status", "reviewed_by", "reviewed_at"]
 
 
+class LeaveAttachmentInline(admin.TabularInline):
+    model = LeaveAttachment
+    extra = 0
+    readonly_fields = ["original_name", "size", "content_type", "uploaded_by", "created_at"]
+
+
 @admin.register(LeaveRequest)
 class LeaveRequestAdmin(admin.ModelAdmin):
     list_display = [
@@ -25,7 +32,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         "student__student_code", "student__first_name", "student__last_name",
     ]
     readonly_fields = ["submitted_at", "cancelled_at", "created_at", "updated_at"]
-    inlines = [LeaveCourseInline]
+    inlines = [LeaveCourseInline, LeaveAttachmentInline]
 
 
 @admin.register(LeaveCourse)

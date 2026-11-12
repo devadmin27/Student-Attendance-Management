@@ -277,6 +277,51 @@ SIMPLE_JWT = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Student leave policy (Phase 4) — configurable, never hardcoded in the SPA.
+# Personal leave must be filed in advance; sick leave may be filed up to the
+# day after it ends, with a short grace period when a reason is supplied.
+# A sick leave of N+ days requires a medical certificate attachment.
+# ---------------------------------------------------------------------------
+LEAVE_PERSONAL_ADVANCE_DAYS = env_int("LEAVE_PERSONAL_ADVANCE_DAYS", 3)
+LEAVE_SICK_NORMAL_GRACE_DAYS = env_int("LEAVE_SICK_NORMAL_GRACE_DAYS", 1)
+LEAVE_SICK_LATE_GRACE_DAYS = env_int("LEAVE_SICK_LATE_GRACE_DAYS", 3)
+LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS = env_int("LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS", 3)
+LEAVE_ATTACHMENT_MAX_BYTES = env_int(
+    "LEAVE_ATTACHMENT_MAX_BYTES", 5 * 1024 * 1024
+)
+LEAVE_ATTACHMENT_MAX_COUNT = env_int("LEAVE_ATTACHMENT_MAX_COUNT", 5)
+LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS = [
+    ext.strip().lower().lstrip(".")
+    for ext in env("LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS", "pdf,jpg,jpeg,png").split(",")
+    if ext.strip()
+]
+LEAVE_ATTACHMENT_ALLOWED_CONTENT_TYPES = [
+    value.strip().lower()
+    for value in env(
+        "LEAVE_ATTACHMENT_ALLOWED_CONTENT_TYPES",
+        "application/pdf,image/jpeg,image/png",
+    ).split(",")
+    if value.strip()
+]
+if not (0 <= LEAVE_PERSONAL_ADVANCE_DAYS <= 30):
+    raise RuntimeError("LEAVE_PERSONAL_ADVANCE_DAYS must be between 0 and 30")
+if not (0 <= LEAVE_SICK_NORMAL_GRACE_DAYS <= 7):
+    raise RuntimeError("LEAVE_SICK_NORMAL_GRACE_DAYS must be between 0 and 7")
+if LEAVE_SICK_LATE_GRACE_DAYS < LEAVE_SICK_NORMAL_GRACE_DAYS:
+    raise RuntimeError(
+        "LEAVE_SICK_LATE_GRACE_DAYS must be >= LEAVE_SICK_NORMAL_GRACE_DAYS"
+    )
+if not (1 <= LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS <= 30):
+    raise RuntimeError(
+        "LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS must be between 1 and 30"
+    )
+if not (1 <= LEAVE_ATTACHMENT_MAX_BYTES <= 20 * 1024 * 1024):
+    raise RuntimeError("LEAVE_ATTACHMENT_MAX_BYTES must be between 1 byte and 20 MB")
+if not (1 <= LEAVE_ATTACHMENT_MAX_COUNT <= 20):
+    raise RuntimeError("LEAVE_ATTACHMENT_MAX_COUNT must be between 1 and 20")
+
+
 # QR token policy (validated)
 QR_TOKEN_TTL_SECONDS = env_int("ATTENDANCE_QR_TTL_SECONDS", 30)
 QR_TOKEN_GRACE_SECONDS = env_int("ATTENDANCE_QR_TOKEN_DISPLAY_GRACE_SECONDS", 10)
@@ -331,6 +376,13 @@ if not DEBUG:
 # ---------------------------------------------------------------------------
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Private media (leave attachments). This path is deliberately NOT routed
+# through Django's static/media view: files are only reachable through the
+# authenticated download endpoint, which enforces role scoping.
+MEDIA_URL = "/private-media/"
+MEDIA_ROOT = BASE_DIR / "private_media"
+os.makedirs(MEDIA_ROOT, exist_ok=True)
 
 # Compressed, hashed static storage — standard WhiteNoise setup for production.
 STORAGES = {

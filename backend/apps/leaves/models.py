@@ -14,9 +14,16 @@ Attendance is never written from leave data (spec §5.2): the roster only reads
 these tables and displays a separate leave badge.
 """
 import uuid
+from pathlib import Path
 
 from django.core.exceptions import ValidationError
 from django.db import models
+
+
+def leave_attachment_upload_path(instance, filename: str) -> str:
+    """Randomised, per-request path so original filenames never collide."""
+    suffix = Path(filename).suffix.lower()[:16]
+    return f"leave_attachments/{instance.leave_request_id}/{uuid.uuid4().hex}{suffix}"
 
 
 class LeaveRequest(models.Model):
@@ -61,6 +68,10 @@ class LeaveRequest(models.Model):
         help_text="ต้องระบุคู่กับเวลาเริ่มลา",
     )
     reason = models.TextField("เหตุผลการลา")
+    late_submission_reason = models.TextField(
+        "เหตุผลการส่งย้อนหลัง", blank=True, default="",
+        help_text="ใช้เมื่อลาป่วยและส่งหลังกำหนด แต่ยังอยู่ภายในระยะผ่อนผัน",
+    )
     # Contact details from the college paper form (ใบลาป่วย/ลากิจส่วนตัว).
     contact_phone = models.CharField(
         "โทรศัพท์ที่ติดต่อได้ระหว่างลา", max_length=32, blank=True, default=""
@@ -127,6 +138,50 @@ class LeaveRequest(models.Model):
 
     def __str__(self):
         return f"{self.student.student_code} {self.start_date}–{self.end_date} ({self.status})"
+
+
+class LeaveAttachment(models.Model):
+    """ไฟล์แนบของคำร้อง (ใบรับรองแพทย์ ฯลฯ) — เก็บนอก public media root.
+
+    Downloads are served by an authenticated, role-scoped endpoint; the file
+    path itself is never exposed to the client.
+    """
+
+    TYPE_CHOICES = (
+        ("medical_certificate", "ใบรับรองแพทย์"),
+        ("other", "เอกสารประกอบอื่น"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    leave_request = models.ForeignKey(
+        LeaveRequest, on_delete=models.CASCADE, related_name="attachments",
+        verbose_name="คำร้องลา",
+    )
+    attachment_type = models.CharField(
+        "ประเภทไฟล์แนบ", max_length=32, choices=TYPE_CHOICES,
+        default="medical_certificate",
+    )
+    file = models.FileField(
+        "ไฟล์แนบ", upload_to=leave_attachment_upload_path, max_length=500,
+    )
+    original_name = models.CharField("ชื่อไฟล์เดิม", max_length=255)
+    content_type = models.CharField("ชนิดไฟล์", max_length=100, blank=True, default="")
+    size = models.PositiveBigIntegerField("ขนาดไฟล์ (bytes)", default=0)
+    uploaded_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="leave_attachments_uploaded", verbose_name="ผู้อัปโหลด",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "leave_attachments"
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["leave_request", "attachment_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.original_name} ({self.attachment_type})"
 
 
 class LeaveCourse(models.Model):

@@ -8,6 +8,18 @@ router.register("leave-requests", views.LeaveRequestViewSet, basename="leave-req
 router.register("leave-courses", views.LeaveCourseViewSet, basename="leave-course")
 
 urlpatterns = [
+    # Policy + private attachment download are explicit routes (the latter is
+    # open to all three roles, unlike the student/admin request viewset).
+    path(
+        "leave-requests/policy/",
+        views.LeavePolicyView.as_view(),
+        name="leave-policy",
+    ),
+    path(
+        "leave-requests/<uuid:pk>/attachments/<uuid:attachment_id>/download/",
+        views.LeaveAttachmentDownloadView.as_view(),
+        name="leave-attachment-download",
+    ),
     # Explicit detail route so the printed A4 document can be served to
     # students, instructors, and admins with its own role-aware scoping.
     path(

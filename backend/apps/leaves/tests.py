@@ -1,6 +1,10 @@
-"""Student leave Phase 1 tests (spec §10 Course Review + Attendance Integration)."""
+"""Student leave tests — submission policy, reviews, print, attendance."""
+import shutil
+import tempfile
 from datetime import datetime, time, timedelta
 
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework import status
 
@@ -9,17 +13,34 @@ from apps.accounts.tests import BaseSamsTest
 from apps.attendance.models import AttendanceRecord, AttendanceSession
 from apps.audit.models import AuditLog
 from apps.courses.models import Course, CourseOffering, Enrollment
-from apps.leaves.models import LeaveCourse, LeaveCourseReview, LeaveRequest
+from apps.leaves.models import (
+    LeaveAttachment,
+    LeaveCourse,
+    LeaveCourseReview,
+    LeaveRequest,
+)
 from apps.schedules.models import ClassSchedule
 
 
+TEST_MEDIA_ROOT = tempfile.mkdtemp(prefix="sams-leave-tests-")
+
+
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class LeaveTestBase(BaseSamsTest):
-    """Base fixture plus a Monday-ish class 09:00–11:00 on the leave date."""
+    """Base fixture plus a class 09:00–11:00 on a date a week from today."""
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        # Keep test uploads out of the repository's private media volume.
+        shutil.rmtree(TEST_MEDIA_ROOT, ignore_errors=True)
 
     def setUp(self):
         super().setUp()
         today = timezone.localdate()
-        self.leave_date = today + timedelta(days=(7 - today.weekday()) % 7)
+        # Keep the default leave date comfortably beyond the personal-leave
+        # advance window (3 days) so unrelated tests are not timing-dependent.
+        self.leave_date = today + timedelta(days=7)
         self.schedule = ClassSchedule.objects.create(
             course_offering=self.offering,
             weekday=self.leave_date.weekday(),
@@ -247,6 +268,303 @@ class LeaveSubmissionTests(LeaveTestBase):
         self.assertEqual(self.create_draft().status_code, 403)
         self.assertEqual(
             self.client.get("/api/v1/leave-requests/").status_code, 200
+        )
+
+
+class LeaveSubmissionPolicyTests(LeaveTestBase):
+    """Phase 4 — advance/retroactive windows and medical certificates."""
+
+    def _submit(self, request_id):
+        return self.client.post(
+            f"/api/v1/leave-requests/{request_id}/submit/", {}, format="json"
+        )
+
+    def _upload(
+        self,
+        request_id,
+        name="medical-certificate.pdf",
+        content_type="application/pdf",
+        attachment_type="medical_certificate",
+    ):
+        upload = SimpleUploadedFile(
+            name, b"%PDF-1.4\nSAMS test certificate\n", content_type=content_type
+        )
+        return self.client.post(
+            f"/api/v1/leave-requests/{request_id}/attachments/",
+            {"file": upload, "attachment_type": attachment_type},
+            format="multipart",
+        )
+
+    def test_policy_endpoint_matches_settings(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get("/api/v1/leave-requests/policy/")
+        self.assertEqual(response.status_code, 200, response.data)
+        policy = response.data["data"]
+        self.assertEqual(policy["personal_advance_days"], 3)
+        self.assertEqual(policy["sick_normal_grace_days"], 1)
+        self.assertEqual(policy["sick_late_grace_days"], 3)
+        self.assertEqual(policy["medical_certificate_min_days"], 3)
+        self.assertIn("pdf", policy["allowed_attachment_extensions"])
+        self.assertEqual(policy["server_date"], timezone.localdate().isoformat())
+
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-requests/policy/").status_code, 200
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-requests/policy/").status_code, 200
+        )
+
+    def test_personal_leave_requires_three_days_advance(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        too_soon = today + timedelta(days=2)
+        draft = self.create_draft(
+            start_date=too_soon.isoformat(), end_date=too_soon.isoformat()
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("start_date", response.data["errors"])
+
+        valid = today + timedelta(days=3)
+        draft = self.create_draft(
+            start_date=valid.isoformat(), end_date=valid.isoformat()
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_sick_leave_can_be_submitted_by_the_day_after_it_ends(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        draft = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=2)).isoformat(),
+            end_date=(today - timedelta(days=1)).isoformat(),
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["status"], "submitted")
+
+    def test_sick_leave_grace_period_requires_a_reason(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        start = today - timedelta(days=4)
+        end = today - timedelta(days=3)  # normal deadline = today - 2
+        draft = self.create_draft(
+            leave_type="sick",
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("late_submission_reason", response.data["errors"])
+
+        with_reason = self.create_draft(
+            leave_type="sick",
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            late_submission_reason="มีไข้สูงและยังเดินทางกลับไม่ไหว",
+        )
+        response = self._submit(with_reason.data["data"]["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            response.data["data"]["late_submission_reason"],
+            "มีไข้สูงและยังเดินทางกลับไม่ไหว",
+        )
+
+    def test_sick_leave_beyond_grace_period_is_rejected(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        draft = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=5)).isoformat(),
+            end_date=(today - timedelta(days=4)).isoformat(),
+            late_submission_reason="ส่งช้าเกินกำหนด",
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("end_date", response.data["errors"])
+
+    def test_sick_leave_of_three_days_requires_medical_certificate(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        draft = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=2)).isoformat(),
+            end_date=today.isoformat(),
+        )
+        request_id = draft.data["data"]["id"]
+
+        blocked = self._submit(request_id)
+        self.assertEqual(blocked.status_code, 400, blocked.data)
+        self.assertIn("attachments", blocked.data["errors"])
+
+        upload = self._upload(request_id)
+        self.assertEqual(upload.status_code, 201, upload.data)
+        self.assertEqual(
+            upload.data["data"]["original_name"], "medical-certificate.pdf"
+        )
+        self.assertEqual(
+            upload.data["data"]["attachment_type"], "medical_certificate"
+        )
+
+        response = self._submit(request_id)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["data"]["requires_medical_certificate"])
+        self.assertTrue(response.data["data"]["medical_certificate_attached"])
+        self.assertEqual(len(response.data["data"]["attachments"]), 1)
+
+    def test_attachment_upload_list_delete_and_validation(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft().data["data"]
+        request_id = draft["id"]
+
+        bad = self._upload(
+            request_id, name="malware.exe", content_type="application/x-msdownload"
+        )
+        self.assertEqual(bad.status_code, 400, bad.data)
+        self.assertIn("file", bad.data["errors"])
+
+        upload = self._upload(request_id)
+        self.assertEqual(upload.status_code, 201, upload.data)
+        attachment_id = upload.data["data"]["id"]
+        self.assertEqual(LeaveAttachment.objects.count(), 1)
+
+        listed = self.client.get(
+            f"/api/v1/leave-requests/{request_id}/attachments/"
+        )
+        self.assertEqual(listed.status_code, 200, listed.data)
+        self.assertEqual(len(listed.data["data"]), 1)
+        self.assertEqual(listed.data["data"][0]["id"], attachment_id)
+
+        deleted = self.client.delete(
+            f"/api/v1/leave-requests/{request_id}/attachments/{attachment_id}/"
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.data)
+        self.assertEqual(LeaveAttachment.objects.count(), 0)
+
+    def test_submitted_request_cannot_gain_or_lose_attachments(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        request_id = submitted["id"]
+
+        blocked = self._upload(request_id)
+        self.assertEqual(blocked.status_code, 400, blocked.data)
+
+        draft = self.create_draft().data["data"]
+        upload = self._upload(draft["id"])
+        attachment_id = upload.data["data"]["id"]
+        self._submit(draft["id"])
+        deleted = self.client.delete(
+            f"/api/v1/leave-requests/{draft['id']}/attachments/{attachment_id}/"
+        )
+        self.assertEqual(deleted.status_code, 400, deleted.data)
+
+    def test_attachment_rbac_student_instructor_and_admin(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft().data["data"]
+        upload = self._upload(draft["id"])
+        attachment_id = upload.data["data"]["id"]
+        download_url = upload.data["data"]["download_url"]
+        self.assertEqual(
+            download_url,
+            f"/leave-requests/{draft['id']}/attachments/{attachment_id}/download/",
+        )
+
+        # Owner can download while the request is still a draft.
+        own = self.client.get(f"/api/v1{download_url}")
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(
+            b"".join(own.streaming_content),
+            b"%PDF-1.4\nSAMS test certificate\n",
+        )
+
+        # Another student cannot see or download it.
+        other_user = User.objects.create_user(
+            "s64009", "s9@x.ac.th", "Str0ngStud!Pass", role="student"
+        )
+        other = other_user.student_profile
+        other.student_code = "640009"
+        other.save()
+        self.auth_user(other_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/leave-requests/{draft['id']}/attachments/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.get(f"/api/v1{download_url}").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        # Drafts stay hidden from instructors.
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get(f"/api/v1{download_url}").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        # After submission, the course instructor and an admin can download.
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self._submit(draft["id"])
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        instructor_download = self.client.get(f"/api/v1{download_url}")
+        self.assertEqual(instructor_download.status_code, 200)
+
+        second_user = User.objects.create_user(
+            "teacher9", "t9@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        self.auth_user(second_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get(f"/api/v1{download_url}").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        self.assertEqual(
+            self.client.get(f"/api/v1{download_url}").status_code, 200
+        )
+        blocked_upload = self._upload(draft["id"])
+        self.assertEqual(blocked_upload.status_code, 403, blocked_upload.data)
+        self.assertEqual(
+            self.client.delete(
+                f"/api/v1/leave-requests/{draft['id']}/attachments/{attachment_id}/"
+            ).status_code,
+            403,
+        )
+
+    def test_instructor_inbox_and_print_include_attachments_and_late_reason(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        draft = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=5)).isoformat(),
+            end_date=(today - timedelta(days=3)).isoformat(),
+            late_submission_reason="ต้องพักรักษาตัวต่อเนื่อง",
+        ).data["data"]
+        upload = self._upload(draft["id"])
+        self.assertEqual(upload.status_code, 201, upload.data)
+        self.assertEqual(self._submit(draft["id"]).status_code, 200)
+
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        course_id = draft["courses"][0]["id"]
+        inbox = self.client.get(f"/api/v1/leave-courses/{course_id}/")
+        self.assertEqual(inbox.status_code, 200, inbox.data)
+        self.assertEqual(len(inbox.data["data"]["attachments"]), 1)
+        self.assertEqual(
+            inbox.data["data"]["late_submission_reason"],
+            "ต้องพักรักษาตัวต่อเนื่อง",
+        )
+        self.assertTrue(inbox.data["data"]["medical_certificate_attached"])
+
+        printed = self.client.get(f"/api/v1/leave-requests/{draft['id']}/print/")
+        self.assertEqual(printed.status_code, 200, printed.data)
+        document = printed.data["data"]
+        self.assertEqual(len(document["attachments"]), 1)
+        self.assertEqual(
+            document["late_submission_reason"], "ต้องพักรักษาตัวต่อเนื่อง"
         )
 
 
