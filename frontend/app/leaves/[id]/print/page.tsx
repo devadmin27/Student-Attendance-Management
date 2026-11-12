@@ -168,11 +168,11 @@ function LeavePrintContent() {
           <div>
             <div className="text-xl font-bold tracking-wide">SAMS</div>
             <div className="text-xs text-slate-600">
-              ระบบจัดการการเข้าเรียนของนักศึกษา
+              วิทยาลัยการสาธารณสุขสิรินธร จังหวัดตรัง
             </div>
           </div>
           <div className="text-right">
-            <h1 className="text-2xl font-bold">ใบลานักศึกษา</h1>
+            <h1 className="text-2xl font-bold">ใบลาป่วย / ลากิจส่วนตัว</h1>
             <div className="mt-1 text-xs text-slate-600">
               รหัสอ้างอิง: {document.id.slice(0, 8).toUpperCase()}
             </div>
@@ -185,13 +185,34 @@ function LeavePrintContent() {
           </div>
         )}
 
-        <table className="mt-4 w-full border-collapse text-sm">
+        <div className="mt-3 space-y-0.5 text-sm">
+          <p>
+            <span className="inline-block w-14 font-semibold">เรื่อง</span>
+            ขอลาป่วย / ลากิจส่วนตัว
+          </p>
+          <p>
+            <span className="inline-block w-14 font-semibold">เรียน</span>
+            ผู้อำนวยการวิทยาลัยการสาธารณสุขสิรินธร จังหวัดตรัง
+          </p>
+        </div>
+
+        <table className="mt-3 w-full border-collapse text-sm">
           <tbody>
             <tr>
               <th className={`${headCellClass} w-32`}>ชื่อ-นามสกุล</th>
               <td className={cellClass}>{document.student_name}</td>
               <th className={`${headCellClass} w-28`}>รหัสนักศึกษา</th>
               <td className={`${cellClass} w-32`}>{document.student_code}</td>
+            </tr>
+            <tr>
+              <th className={headCellClass}>หลักสูตร</th>
+              <td className={cellClass} colSpan={3}>
+                {document.student_program_name ?? "-"}
+                {document.student_class_group_name
+                  ? ` · ${document.student_class_group_name}`
+                  : ""}{" "}
+                · ชั้นปี {document.student_year_level}
+              </td>
             </tr>
             <tr>
               <th className={headCellClass}>ประเภทการลา</th>
@@ -204,10 +225,25 @@ function LeavePrintContent() {
               <td className={cellClass}>
                 {formatThaiDate(document.start_date)} —{" "}
                 {formatThaiDate(document.end_date)}
+                <div className="text-slate-600">
+                  มีกำหนดเวลา {document.total_days} วัน
+                </div>
               </td>
               <th className={headCellClass}>เวลา</th>
               <td className={cellClass}>
                 {timeRange(document.start_time, document.end_time)}
+              </td>
+            </tr>
+            <tr>
+              <th className={headCellClass}>โทรศัพท์</th>
+              <td className={cellClass}>{document.contact_phone || "-"}</td>
+              <th className={headCellClass}>LINE ID</th>
+              <td className={cellClass}>{document.line_id || "-"}</td>
+            </tr>
+            <tr>
+              <th className={headCellClass}>ที่อยู่ระหว่างการลา</th>
+              <td className={cellClass} colSpan={3}>
+                {document.address_during_leave || "-"}
               </td>
             </tr>
             <tr>
@@ -230,6 +266,30 @@ function LeavePrintContent() {
           <p className="mt-1 min-h-[56px] whitespace-pre-wrap border border-slate-400 px-3 py-2 text-sm">
             {document.reason}
           </p>
+        </section>
+
+        <section className="mt-4">
+          <h2 className="text-sm font-bold">ผู้ปกครอง</h2>
+          <table className="mt-1 w-full border-collapse text-sm">
+            <tbody>
+              <tr>
+                <th className={`${headCellClass} w-32`}>รับทราบการลา</th>
+                <td className={cellClass}>
+                  {document.guardian_acknowledged
+                    ? "ผู้ปกครองรับทราบแล้ว"
+                    : "ยังไม่ยืนยัน"}
+                </td>
+                <th className={`${headCellClass} w-28`}>โทรศัพท์</th>
+                <td className={cellClass}>{document.guardian_phone || "-"}</td>
+              </tr>
+              <tr>
+                <th className={headCellClass}>ที่อยู่</th>
+                <td className={cellClass} colSpan={3}>
+                  {document.guardian_address || "-"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </section>
 
         <section className="mt-5">

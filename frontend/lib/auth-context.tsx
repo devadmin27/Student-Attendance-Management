@@ -26,6 +26,9 @@ export interface SamsUser {
     employee_code?: string;
     first_name?: string;
     last_name?: string;
+    program_name?: string | null;
+    class_group_name?: string | null;
+    academic_year_level?: number;
   } | null;
 }
 
