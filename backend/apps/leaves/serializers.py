@@ -1,4 +1,6 @@
 """Serializers for leave requests, available courses, and course reviews."""
+import re
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -87,10 +89,16 @@ class LeaveCourseSerializer(serializers.ModelSerializer):
 class LeaveRequestSerializer(serializers.ModelSerializer):
     student_code = serializers.CharField(source="student.student_code", read_only=True)
     student_name = serializers.SerializerMethodField()
+    student_program_name = serializers.SerializerMethodField()
+    student_class_group_name = serializers.SerializerMethodField()
+    student_year_level = serializers.IntegerField(
+        source="student.academic_year_level", read_only=True
+    )
     leave_type_display = serializers.CharField(
         source="get_leave_type_display", read_only=True
     )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    total_days = serializers.IntegerField(read_only=True)
     courses = LeaveCourseSerializer(many=True, read_only=True)
     course_count = serializers.IntegerField(source="courses.count", read_only=True)
     is_editable = serializers.BooleanField(read_only=True)
@@ -100,9 +108,13 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         model = LeaveRequest
         fields = [
             "id", "student", "student_code", "student_name",
+            "student_program_name", "student_class_group_name", "student_year_level",
             "leave_type", "leave_type_display",
-            "start_date", "end_date", "start_time", "end_time",
-            "reason", "status", "status_display",
+            "start_date", "end_date", "start_time", "end_time", "total_days",
+            "reason",
+            "contact_phone", "line_id", "address_during_leave",
+            "guardian_acknowledged", "guardian_phone", "guardian_address",
+            "status", "status_display",
             "submitted_at", "cancelled_at",
             "course_count", "courses", "is_editable", "is_cancellable",
             "created_at", "updated_at",
@@ -111,6 +123,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
     def get_student_name(self, obj):
         return f"{obj.student.first_name} {obj.student.last_name}".strip()
+
+    def get_student_program_name(self, obj):
+        program = obj.student.program
+        return program.program_name if program else None
+
+    def get_student_class_group_name(self, obj):
+        group = obj.student.class_group
+        return group.group_name if group else None
 
 
 class LeaveRequestWriteSerializer(serializers.ModelSerializer):
@@ -125,7 +145,10 @@ class LeaveRequestWriteSerializer(serializers.ModelSerializer):
         model = LeaveRequest
         fields = [
             "leave_type", "start_date", "end_date", "start_time", "end_time",
-            "reason", "course_offering_ids",
+            "reason",
+            "contact_phone", "line_id", "address_during_leave",
+            "guardian_acknowledged", "guardian_phone", "guardian_address",
+            "course_offering_ids",
         ]
 
     def validate(self, attrs):
@@ -134,6 +157,13 @@ class LeaveRequestWriteSerializer(serializers.ModelSerializer):
         start_time = attrs.get("start_time", getattr(self.instance, "start_time", None))
         end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
         services.validate_leave_range(start_date, end_date, start_time, end_time)
+        for field in ("contact_phone", "guardian_phone"):
+            value = attrs.get(field, getattr(self.instance, field, "")) or ""
+            digits = re.sub(r"\D", "", value)
+            if value and not 9 <= len(digits) <= 10:
+                raise serializers.ValidationError(
+                    {field: "กรุณาระบุหมายเลขโทรศัพท์ 9–10 หลัก"}
+                )
         return attrs
 
     @transaction.atomic
@@ -309,10 +339,16 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
 
     student_code = serializers.CharField(source="student.student_code", read_only=True)
     student_name = serializers.SerializerMethodField()
+    student_program_name = serializers.SerializerMethodField()
+    student_class_group_name = serializers.SerializerMethodField()
+    student_year_level = serializers.IntegerField(
+        source="student.academic_year_level", read_only=True
+    )
     leave_type_display = serializers.CharField(
         source="get_leave_type_display", read_only=True
     )
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    total_days = serializers.IntegerField(read_only=True)
     scope = serializers.SerializerMethodField()
     generated_at = serializers.SerializerMethodField()
     courses = serializers.SerializerMethodField()
@@ -321,9 +357,13 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
         model = LeaveRequest
         fields = [
             "id", "student_code", "student_name",
+            "student_program_name", "student_class_group_name", "student_year_level",
             "leave_type", "leave_type_display",
-            "start_date", "end_date", "start_time", "end_time",
-            "reason", "status", "status_display",
+            "start_date", "end_date", "start_time", "end_time", "total_days",
+            "reason",
+            "contact_phone", "line_id", "address_during_leave",
+            "guardian_acknowledged", "guardian_phone", "guardian_address",
+            "status", "status_display",
             "submitted_at", "cancelled_at", "created_at",
             "scope", "generated_at", "courses",
         ]
@@ -331,6 +371,14 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
 
     def get_student_name(self, obj):
         return f"{obj.student.first_name} {obj.student.last_name}".strip()
+
+    def get_student_program_name(self, obj):
+        program = obj.student.program
+        return program.program_name if program else None
+
+    def get_student_class_group_name(self, obj):
+        group = obj.student.class_group
+        return group.group_name if group else None
 
     def get_scope(self, obj):
         return self.context.get("scope", "full")

@@ -250,6 +250,50 @@ class LeaveSubmissionTests(LeaveTestBase):
         )
 
 
+class LeaveFormDetailsTests(LeaveTestBase):
+    def test_contact_fields_round_trip_and_total_days(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        end = self.leave_date + timedelta(days=2)
+        response = self.create_draft(
+            start_date=self.leave_date.isoformat(),
+            end_date=end.isoformat(),
+            contact_phone="08-1234-5678",
+            line_id="student01",
+            address_during_leave="บ้านเลขที่ 1 ตำบลในเมือง",
+            guardian_acknowledged=True,
+            guardian_phone="0899999999",
+            guardian_address="บ้านเลขที่ 2",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        body = response.data["data"]
+        self.assertEqual(body["total_days"], 3)
+        self.assertEqual(body["contact_phone"], "08-1234-5678")
+        self.assertTrue(body["guardian_acknowledged"])
+        self.assertEqual(body["student_program_name"], "วิศวกรรมคอมพิวเตอร์")
+        self.assertEqual(body["student_class_group_name"], "ห้อง 1")
+        self.assertEqual(body["student_year_level"], 1)
+
+        update = self.client.patch(
+            f"/api/v1/leave-requests/{body['id']}/",
+            {"guardian_acknowledged": False, "contact_phone": "0812345678"},
+            format="json",
+        )
+        self.assertEqual(update.status_code, 200, update.data)
+        self.assertFalse(update.data["data"]["guardian_acknowledged"])
+        self.assertEqual(update.data["data"]["contact_phone"], "0812345678")
+
+    def test_invalid_phone_numbers_are_rejected(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        for field, payload in (
+            ("contact_phone", {"contact_phone": "abc"}),
+            ("guardian_phone", {"guardian_phone": "123"}),
+        ):
+            with self.subTest(field=field):
+                response = self.create_draft(**payload)
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn(field, response.data["errors"])
+
+
 class LeaveCourseReviewTests(LeaveTestBase):
     def _leave_course_id(self, request_data):
         return request_data["courses"][0]["id"]
@@ -545,6 +589,38 @@ class LeavePrintTests(LeaveTestBase):
             self._print(draft["id"]).status_code,
             status.HTTP_404_NOT_FOUND,
         )
+
+    def test_print_includes_contact_guardian_and_identity_details(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        end = self.leave_date + timedelta(days=1)
+        submitted = self.create_submitted(
+            start_date=self.leave_date.isoformat(),
+            end_date=end.isoformat(),
+            contact_phone="0812345678",
+            line_id="student01",
+            address_during_leave="บ้านเลขที่ 9 ตำบลทับเที่ยง",
+            guardian_acknowledged=True,
+            guardian_phone="0898887777",
+            guardian_address="บ้านเลขที่ 10 อำเภอเมือง",
+        )
+
+        response = self._print(submitted["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        document = response.data["data"]
+        self.assertEqual(document["total_days"], 2)
+        self.assertEqual(document["contact_phone"], "0812345678")
+        self.assertEqual(document["line_id"], "student01")
+        self.assertEqual(
+            document["address_during_leave"], "บ้านเลขที่ 9 ตำบลทับเที่ยง"
+        )
+        self.assertTrue(document["guardian_acknowledged"])
+        self.assertEqual(document["guardian_phone"], "0898887777")
+        self.assertEqual(
+            document["guardian_address"], "บ้านเลขที่ 10 อำเภอเมือง"
+        )
+        self.assertEqual(document["student_program_name"], "วิศวกรรมคอมพิวเตอร์")
+        self.assertEqual(document["student_class_group_name"], "ห้อง 1")
+        self.assertEqual(document["student_year_level"], 1)
 
     def test_print_requires_login(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")

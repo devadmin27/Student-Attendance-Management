@@ -88,6 +88,16 @@ class LoginTests(BaseSamsTest):
         self.assertIn("access", response.data["data"])
         self.assertEqual(response.data["data"]["user"]["role"], "student")
         self.assertEqual(response.data["data"]["user"]["profile"]["student_code"], "640001")
+        self.assertEqual(
+            response.data["data"]["user"]["profile"]["program_name"],
+            "วิศวกรรมคอมพิวเตอร์",
+        )
+        self.assertEqual(
+            response.data["data"]["user"]["profile"]["class_group_name"], "ห้อง 1"
+        )
+        self.assertEqual(
+            response.data["data"]["user"]["profile"]["academic_year_level"], 1
+        )
         # HttpOnly refresh cookie must be set (no refresh in body for clients)
         self.assertIn("sams_refresh", response.cookies)
         cookie = response.cookies["sams_refresh"]

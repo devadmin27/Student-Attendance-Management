@@ -49,7 +49,9 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return LeaveRequest.objects.none()
-        qs = LeaveRequest.objects.select_related("student").prefetch_related(
+        qs = LeaveRequest.objects.select_related(
+            "student", "student__program", "student__class_group"
+        ).prefetch_related(
             "courses",
             "courses__course_offering__course",
             "courses__course_offering__academic_term",
@@ -315,7 +317,9 @@ class LeaveRequestPrintView(APIView):
     allowed_roles = {"student", "instructor", "admin"}
 
     def get(self, request, pk):
-        queryset = LeaveRequest.objects.select_related("student").prefetch_related(
+        queryset = LeaveRequest.objects.select_related(
+            "student", "student__program", "student__class_group"
+        ).prefetch_related(
             "courses",
             "courses__course_offering__course",
             "courses__course_offering__academic_term",

@@ -206,6 +206,11 @@ class SAMSLoginSerializer(TokenObtainPairSerializer):
                 "student_code": student.student_code,
                 "first_name": student.first_name,
                 "last_name": student.last_name,
+                "program_name": student.program.program_name if student.program_id else None,
+                "class_group_name": (
+                    student.class_group.group_name if student.class_group_id else None
+                ),
+                "academic_year_level": student.academic_year_level,
             }
         elif instructor is not None:
             profile = {
@@ -250,7 +255,12 @@ class MeSerializer(serializers.ModelSerializer):
                 "first_name": student.first_name,
                 "last_name": student.last_name,
                 "program_id": str(student.program_id) if student.program_id else None,
+                "program_name": student.program.program_name if student.program_id else None,
                 "class_group_id": str(student.class_group_id) if student.class_group_id else None,
+                "class_group_name": (
+                    student.class_group.group_name if student.class_group_id else None
+                ),
+                "academic_year_level": student.academic_year_level,
             }
         if instructor is not None:
             return {

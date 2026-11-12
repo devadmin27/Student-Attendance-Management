@@ -61,6 +61,21 @@ class LeaveRequest(models.Model):
         help_text="ต้องระบุคู่กับเวลาเริ่มลา",
     )
     reason = models.TextField("เหตุผลการลา")
+    # Contact details from the college paper form (ใบลาป่วย/ลากิจส่วนตัว).
+    contact_phone = models.CharField(
+        "โทรศัพท์ที่ติดต่อได้ระหว่างลา", max_length=32, blank=True, default=""
+    )
+    line_id = models.CharField("LINE ID", max_length=64, blank=True, default="")
+    address_during_leave = models.TextField(
+        "ที่อยู่ระหว่างการลา", blank=True, default=""
+    )
+    guardian_acknowledged = models.BooleanField(
+        "ผู้ปกครองรับทราบการลาแล้ว", default=False
+    )
+    guardian_phone = models.CharField(
+        "โทรศัพท์ผู้ปกครอง", max_length=32, blank=True, default=""
+    )
+    guardian_address = models.TextField("ที่อยู่ผู้ปกครอง", blank=True, default="")
     status = models.CharField(
         "สถานะคำร้อง", max_length=32, choices=STATUS_CHOICES, default="draft"
     )
@@ -94,6 +109,13 @@ class LeaveRequest(models.Model):
             and self.end_time <= self.start_time
         ):
             raise ValidationError("เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มลา")
+
+    @property
+    def total_days(self) -> int:
+        """Inclusive number of leave days (form: มีกำหนดเวลา ... วัน)."""
+        if not self.start_date or not self.end_date:
+            return 0
+        return (self.end_date - self.start_date).days + 1
 
     @property
     def is_editable(self) -> bool:
