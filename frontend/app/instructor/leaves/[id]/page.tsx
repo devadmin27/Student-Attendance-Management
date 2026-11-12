@@ -9,6 +9,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
+import LeaveAttachmentList from "@/components/LeaveAttachments";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
@@ -182,7 +183,40 @@ function InstructorLeaveDetailContent() {
               <dt className="text-xs text-slate-500">เหตุผลการลา</dt>
               <dd className="whitespace-pre-wrap text-slate-800">{item.reason}</dd>
             </div>
+            {item.late_submission_reason && (
+              <div className="md:col-span-2">
+                <dt className="text-xs text-slate-500">เหตุผลการส่งย้อนหลัง</dt>
+                <dd className="whitespace-pre-wrap text-slate-800">
+                  {item.late_submission_reason}
+                </dd>
+              </div>
+            )}
           </dl>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">
+              เอกสารแนบ ({item.attachments.length})
+            </h2>
+            {item.requires_medical_certificate && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  item.medical_certificate_attached
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                {item.medical_certificate_attached
+                  ? "แนบใบรับรองแพทย์แล้ว"
+                  : "ยังไม่ได้แนบใบรับรองแพทย์"}
+              </span>
+            )}
+          </div>
+          <LeaveAttachmentList
+            attachments={item.attachments}
+            emptyText="ไม่มีไฟล์แนบ"
+          />
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">

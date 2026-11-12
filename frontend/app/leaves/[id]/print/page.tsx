@@ -268,6 +268,39 @@ function LeavePrintContent() {
           </p>
         </section>
 
+        {document.late_submission_reason && (
+          <section className="mt-4">
+            <h2 className="text-sm font-bold">เหตุผลการส่งย้อนหลัง</h2>
+            <p className="mt-1 whitespace-pre-wrap border border-slate-400 px-3 py-2 text-sm">
+              {document.late_submission_reason}
+            </p>
+          </section>
+        )}
+
+        <section className="mt-4">
+          <h2 className="text-sm font-bold">
+            เอกสารแนบ ({document.attachments.length})
+          </h2>
+          {document.attachments.length === 0 ? (
+            <p className="mt-1 text-sm text-slate-600">ไม่มีไฟล์แนบ</p>
+          ) : (
+            <ul className="mt-1 list-inside list-disc text-sm">
+              {document.attachments.map((attachment) => (
+                <li key={attachment.id}>
+                  {attachment.original_name} — {attachment.attachment_type_display}
+                </li>
+              ))}
+            </ul>
+          )}
+          {document.requires_medical_certificate && (
+            <p className="mt-1 text-xs text-slate-600">
+              {document.medical_certificate_attached
+                ? "แนบใบรับรองแพทย์แล้ว"
+                : "ยังไม่ได้แนบใบรับรองแพทย์"}
+            </p>
+          )}
+        </section>
+
         <section className="mt-4">
           <h2 className="text-sm font-bold">ผู้ปกครอง</h2>
           <table className="mt-1 w-full border-collapse text-sm">

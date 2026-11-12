@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
+import LeaveAttachmentList from "@/components/LeaveAttachments";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
@@ -172,6 +173,14 @@ function AdminLeaveDetailContent() {
               <dt className="text-xs text-slate-500">เหตุผล</dt>
               <dd className="whitespace-pre-wrap text-slate-800">{request.reason}</dd>
             </div>
+            {request.late_submission_reason && (
+              <div className="md:col-span-2">
+                <dt className="text-xs text-slate-500">เหตุผลการส่งย้อนหลัง</dt>
+                <dd className="whitespace-pre-wrap text-slate-800">
+                  {request.late_submission_reason}
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="text-xs text-slate-500">สร้างเมื่อ</dt>
               <dd className="text-slate-800">{formatThaiDateTime(request.created_at)}</dd>
@@ -186,6 +195,31 @@ function AdminLeaveDetailContent() {
           <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
             ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว ไม่สามารถแก้ไขหรือพิจารณาคำร้องแทนอาจารย์รายวิชาได้
           </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">
+              เอกสารแนบ ({request.attachments.length})
+            </h2>
+            {request.requires_medical_certificate && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  request.medical_certificate_attached
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                {request.medical_certificate_attached
+                  ? "แนบใบรับรองแพทย์แล้ว"
+                  : "ยังไม่ได้แนบใบรับรองแพทย์"}
+              </span>
+            )}
+          </div>
+          <LeaveAttachmentList
+            attachments={request.attachments}
+            emptyText="ไม่มีไฟล์แนบ"
+          />
         </div>
 
         <div>

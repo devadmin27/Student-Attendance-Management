@@ -4,12 +4,13 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
+import LeaveAttachmentList from "@/components/LeaveAttachments";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { formatThaiDate, formatThaiDateTime } from "@/lib/format";
 import { alertError, confirmDialog, toastSuccess } from "@/lib/swal";
-import type { LeaveCourse, LeaveRequest } from "@/lib/types";
+import type { LeaveAttachment, LeaveCourse, LeaveRequest } from "@/lib/types";
 
 function timeRange(start: string | null, end: string | null): string {
   if (!start || !end) return "ลาทั้งวัน";
@@ -100,6 +101,9 @@ function StudentLeaveDetailContent() {
   const [request, setRequest] = useState<LeaveRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +174,46 @@ function StudentLeaveDetailContent() {
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  const removeAttachment = async (attachment: LeaveAttachment) => {
+    if (!request) return;
+    const confirmed = await confirmDialog({
+      title: "ยืนยันการลบไฟล์แนบ",
+      text: `ลบ "${attachment.original_name}" ออกจากคำร้องนี้`,
+      confirmText: "ลบไฟล์แนบ",
+    });
+    if (!confirmed) return;
+    setDeletingAttachmentId(attachment.id);
+    try {
+      await samsRequest<null>({
+        url: `/leave-requests/${request.id}/attachments/${attachment.id}/`,
+        method: "DELETE",
+      });
+      setRequest((prev) =>
+        prev
+          ? {
+              ...prev,
+              attachments: prev.attachments.filter(
+                (item) => item.id !== attachment.id,
+              ),
+              medical_certificate_attached: prev.attachments.some(
+                (item) =>
+                  item.id !== attachment.id &&
+                  item.attachment_type === "medical_certificate",
+              ),
+            }
+          : prev,
+      );
+      await toastSuccess("ลบไฟล์แนบสำเร็จ");
+    } catch (error) {
+      await alertError(
+        "ลบไฟล์แนบไม่สำเร็จ",
+        error instanceof ApiError ? error.message : undefined,
+      );
+    } finally {
+      setDeletingAttachmentId(null);
     }
   };
 
@@ -253,6 +297,14 @@ function StudentLeaveDetailContent() {
               <dt className="text-xs text-slate-500">เหตุผล</dt>
               <dd className="whitespace-pre-wrap text-slate-800">{request.reason}</dd>
             </div>
+            {request.late_submission_reason && (
+              <div className="md:col-span-2">
+                <dt className="text-xs text-slate-500">เหตุผลการส่งย้อนหลัง</dt>
+                <dd className="whitespace-pre-wrap text-slate-800">
+                  {request.late_submission_reason}
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="text-xs text-slate-500">สร้างเมื่อ</dt>
               <dd className="text-slate-800">{formatThaiDateTime(request.created_at)}</dd>
@@ -264,6 +316,49 @@ function StudentLeaveDetailContent() {
               </dd>
             </div>
           </dl>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">
+              เอกสารแนบ ({request.attachments.length})
+            </h2>
+            {request.requires_medical_certificate && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  request.medical_certificate_attached
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                {request.medical_certificate_attached
+                  ? "แนบใบรับรองแพทย์แล้ว"
+                  : "ยังไม่ได้แนบใบรับรองแพทย์"}
+              </span>
+            )}
+          </div>
+          <LeaveAttachmentList
+            attachments={request.attachments}
+            canDelete={request.is_editable}
+            onDelete={(attachment) => void removeAttachment(attachment)}
+            deletingId={deletingAttachmentId}
+          />
+          {request.requires_medical_certificate &&
+            !request.medical_certificate_attached && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                ลาป่วยครั้งนี้ต้องแนบใบรับรองแพทย์ก่อนส่งคำร้อง —{" "}
+                {request.is_editable ? (
+                  <Link
+                    href={`/student/leaves/${request.id}/edit`}
+                    className="font-medium underline"
+                  >
+                    แก้ไขคำร้องเพื่อแนบไฟล์
+                  </Link>
+                ) : (
+                  "กรุณาติดต่ออาจารย์ผู้สอนหรือผู้ดูแลระบบ"
+                )}
+              </p>
+            )}
         </div>
 
         <div>

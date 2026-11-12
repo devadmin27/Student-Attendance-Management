@@ -201,6 +201,33 @@ export interface RosterRow {
 
 // ---- Student leave (Phase 1) ----
 export type LeaveType = "sick" | "personal" | "other";
+export type LeaveAttachmentType = "medical_certificate" | "other";
+
+export interface LeaveAttachment {
+  id: string;
+  attachment_type: LeaveAttachmentType;
+  attachment_type_display: string;
+  original_name: string;
+  content_type: string;
+  size: number;
+  uploaded_by: string | null;
+  uploaded_by_name: string | null;
+  /** Authenticated download path (never a public media URL). */
+  download_url: string;
+  created_at: string;
+}
+
+export interface LeavePolicy {
+  personal_advance_days: number;
+  sick_normal_grace_days: number;
+  sick_late_grace_days: number;
+  medical_certificate_min_days: number;
+  max_attachment_bytes: number;
+  max_attachment_count: number;
+  allowed_attachment_extensions: string[];
+  allowed_attachment_content_types: string[];
+  server_date: string;
+}
 export type LeaveRequestStatus =
   | "draft"
   | "submitted"
@@ -274,6 +301,7 @@ export interface LeaveRequest {
   end_time: string | null;
   total_days: number;
   reason: string;
+  late_submission_reason: string;
   contact_phone: string;
   line_id: string;
   address_during_leave: string;
@@ -284,6 +312,11 @@ export interface LeaveRequest {
   status_display: string;
   submitted_at: string | null;
   cancelled_at: string | null;
+  attachments: LeaveAttachment[];
+  requires_medical_certificate: boolean;
+  medical_certificate_attached: boolean;
+  submission_deadline: string | null;
+  submission_grace_deadline: string | null;
   course_count: number;
   courses: LeaveCourse[];
   is_editable: boolean;
@@ -319,7 +352,11 @@ export interface LeaveCourseInboxItem {
   start_time: string | null;
   end_time: string | null;
   reason: string;
+  late_submission_reason: string;
   submitted_at: string | null;
+  attachments: LeaveAttachment[];
+  requires_medical_certificate: boolean;
+  medical_certificate_attached: boolean;
   course_offering: string;
   course_code: string;
   course_name: string;
@@ -371,6 +408,7 @@ export interface LeavePrintDocument {
   end_time: string | null;
   total_days: number;
   reason: string;
+  late_submission_reason: string;
   contact_phone: string;
   line_id: string;
   address_during_leave: string;
@@ -384,6 +422,9 @@ export interface LeavePrintDocument {
   created_at: string;
   scope: "full" | "course";
   generated_at: string;
+  attachments: LeaveAttachment[];
+  requires_medical_certificate: boolean;
+  medical_certificate_attached: boolean;
   courses: LeavePrintCourse[];
 }
 
