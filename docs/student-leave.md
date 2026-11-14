@@ -252,6 +252,25 @@ LeaveCourse แต่ละรายการต้องเชื่อมโ�
 - แยก Leave Status ออกจาก Attendance Status
 - ห้ามแก้ไขสถานะการลาโดยอาศัยเพียงการเปลี่ยนสถานะเข้าเรียน
 
+### 7.5 เส้นทางหน้าจอที่ใช้งานจริง (Phase 1–4)
+
+| เส้นทาง | ผู้ใช้ | หน้าที่ |
+|---|---|---|
+| `/student/leaves` | student | รายการใบลา ตัวกรองสถานะ และ pagination |
+| `/student/leaves/new` | student | สร้างใบลา เลือกรายวิชา และแนบเอกสาร |
+| `/student/leaves/[id]` | student | รายละเอียด Workflow Timeline และปุ่มส่ง/ส่งอีกครั้ง/ยกเลิก |
+| `/instructor/leaves` | instructor | คำร้องในรายวิชาที่รับผิดชอบ |
+| `/instructor/leaves/[id]` | instructor | บันทึกความเห็นรายวิชา (แยกจาก Workflow หลัก) |
+| `/approvals` | instructor, admin | คิวพิจารณาตามขั้นตอน (instructor เห็นเฉพาะขั้นของตน) |
+| `/approvals/[id]` | instructor, admin | บันทึกความเห็น ส่งกลับ และดำเนินการแทน (admin) |
+| `/admin/leave-roles` | admin | มอบหมาย `LeaveRoleAssignment` |
+| `/leaves/[id]/print` | student, instructor, admin | พิมพ์ A4 ตามขอบเขตสิทธิ์ (instructor เห็นเฉพาะรายวิชาตน) |
+
+`LeaveRoleAssignment` เป็นแหล่งความจริงเดียวของผู้รับผิดชอบ Workflow ลำดับความเฉพาะเจาะจงคือ
+กลุ่มเรียน + ภาคการศึกษา > กลุ่มเรียน > หลักสูตร + ภาคการศึกษา > หลักสูตร > ทั้งระบบ
+อาจารย์ที่ปรึกษาและหัวหน้าหน่วยหลักสูตรต้องมีขอบเขตอย่างน้อยหนึ่งระดับ ส่วนผู้อนุมัติกำหนดระดับทั้งระบบได้
+หาก resolve ผู้รับผิดชอบไม่ครบตอนส่งคำร้อง ระบบต้องปฏิเสธการส่ง (HTTP 400) และนักศึกษาต้องติดต่อผู้ดูแลระบบ
+
 ## 8. Authorization & Security
 
 ใช้ Role-Based Access Control (RBAC) ตามระบบเดิม
@@ -283,6 +302,27 @@ LeaveCourse แต่ละรายการต้องเชื่อมโ�
 - Submit Final Approval Decision
 - Get Leave Workflow History
 - Get Attendance Leave Status
+
+### 9.1 Endpoint ที่ใช้งานจริง
+
+| Endpoint | สิทธิ์ | หน้าที่ |
+|---|---|---|
+| `GET/POST /leave-requests/` | student (ของตน), admin | รายการ/สร้างคำร้อง |
+| `POST /leave-requests/{id}/submit/` | student เจ้าของ | ส่งคำร้องและ resolve ผู้รับผิดชอบทั้ง 3 ขั้น |
+| `POST /leave-requests/{id}/resubmit/` | student เจ้าของ | ส่งใหม่หลังถูกส่งกลับ เริ่มที่ขั้นที่ 1 |
+| `POST /leave-requests/{id}/cancel/` | student เจ้าของ | ยกเลิกระหว่างพิจารณา |
+| `GET /leave-requests/{id}/history/` | ผู้มีสิทธิ์เห็นคำร้อง | Workflow History |
+| `POST /leave-requests/{id}/admin-override/` | admin | ดำเนินการแทน (ต้องมีเหตุผล) |
+| `GET /leave-approvals/` | instructor, admin | คิวพิจารณา (instructor เฉพาะขั้นของตน) |
+| `POST /leave-approvals/{id}/advisor-opinion/` | advisor ปัจจุบัน | บันทึกความเห็นและส่งต่อ |
+| `POST /leave-approvals/{id}/program-head-opinion/` | program head ปัจจุบัน | บันทึกความเห็นและส่งต่อ |
+| `POST /leave-approvals/{id}/final-decision/` | final approver ปัจจุบัน | อนุมัติ/ไม่อนุมัติ |
+| `POST /leave-approvals/{id}/return/` | advisor/program head ปัจจุบัน | ส่งกลับเพื่อแก้ไข |
+| `GET/POST/PATCH/DELETE /leave-role-assignments/` | admin | จัดการ `LeaveRoleAssignment` |
+| `GET /leave-requests/{id}/print/` | student, instructor, admin | เอกสารพิมพ์ A4 ตามขอบเขตสิทธิ์ |
+
+`available_actions` ใน payload ของคำร้องใช้บอก Frontend ว่าผู้ใช้ปัจจุบันทำอะไรได้
+แต่ทุก endpoint ต้องตรวจสอบขั้นตอนปัจจุบัน ผู้รับผิดชอบ และสิทธิ์ซ้ำที่ Service Layer เสมอ
 
 ตรวจสอบข้อมูลและสิทธิ์ใน Django Backend
 

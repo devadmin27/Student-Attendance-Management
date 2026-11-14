@@ -57,6 +57,7 @@ const BADGE_TONES: Record<string, string> = {
   pending: "bg-amber-100 text-amber-800",
   reviewed: "bg-sky-100 text-sky-800",
   acknowledged: "bg-emerald-100 text-emerald-800",
+  skipped: "bg-slate-100 text-slate-600",
 };
 
 const THAI_LABELS: Record<string, string> = {

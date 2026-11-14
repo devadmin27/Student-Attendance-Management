@@ -13,7 +13,81 @@ from apps.leaves.models import (
     LeaveCourse,
     LeaveCourseReview,
     LeaveRequest,
+    LeaveRoleAssignment,
+    LeaveWorkflowHistory,
+    LeaveWorkflowStep,
 )
+
+
+def _user_display_name(user):
+    if user is None:
+        return None
+    profile = getattr(user, "instructor_profile", None) or getattr(
+        user, "student_profile", None
+    )
+    if profile is not None:
+        name = f"{profile.first_name} {profile.last_name}".strip()
+        if name:
+            return name
+    return user.get_full_name() or user.username
+
+
+class LeaveWorkflowStepSerializer(serializers.ModelSerializer):
+    role_type_display = serializers.CharField(
+        source="get_role_type_display", read_only=True
+    )
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
+    assignee_name = serializers.SerializerMethodField()
+    assignee_username = serializers.CharField(
+        source="assignee.username", read_only=True, default=None
+    )
+    acted_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveWorkflowStep
+        fields = [
+            "id", "step_order", "role_type", "role_type_display",
+            "assignee", "assignee_name", "assignee_username",
+            "status", "status_display",
+            "acted_by", "acted_by_name", "acted_at", "comment", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_assignee_name(self, obj):
+        return _user_display_name(obj.assignee)
+
+    def get_acted_by_name(self, obj):
+        return _user_display_name(obj.acted_by)
+
+
+class LeaveWorkflowHistorySerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+    action_display = serializers.SerializerMethodField()
+    role_type_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveWorkflowHistory
+        fields = [
+            "id", "step_order", "role_type", "role_type_display",
+            "action", "action_display", "from_status", "to_status",
+            "actor", "actor_name", "comment", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        return _user_display_name(obj.actor)
+
+    def get_action_display(self, obj):
+        return services.ACTION_LABELS.get(obj.action, obj.action)
+
+    def get_role_type_display(self, obj):
+        if not obj.role_type:
+            return ""
+        return dict(LeaveWorkflowStep._meta.get_field("role_type").choices).get(
+            obj.role_type, obj.role_type
+        )
 
 
 class LeaveCourseReviewSerializer(serializers.ModelSerializer):
@@ -174,6 +248,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     submission_grace_deadline = serializers.SerializerMethodField()
     is_editable = serializers.BooleanField(read_only=True)
     is_cancellable = serializers.BooleanField(read_only=True)
+    workflow_steps = LeaveWorkflowStepSerializer(many=True, read_only=True)
+    workflow_history = LeaveWorkflowHistorySerializer(many=True, read_only=True)
+    current_step = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -191,6 +269,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "medical_certificate_attached",
             "submission_deadline", "submission_grace_deadline",
             "course_count", "courses", "is_editable", "is_cancellable",
+            "workflow_steps", "workflow_history", "current_step",
+            "available_actions",
             "created_at", "updated_at",
         ]
         read_only_fields = fields
@@ -226,6 +306,21 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             obj.leave_type, obj.start_date, obj.end_date
         )
         return grace.isoformat() if grace else None
+
+    def get_current_step(self, obj):
+        role_type = services.ROLE_FOR_STATUS.get(obj.status)
+        if role_type is None:
+            return None
+        for step in obj.workflow_steps.all():
+            if step.role_type == role_type:
+                return LeaveWorkflowStepSerializer(step).data
+        return None
+
+    def get_available_actions(self, obj):
+        request = self.context.get("request")
+        return services.available_actions(
+            getattr(request, "user", None), obj
+        )
 
 
 class LeaveRequestWriteSerializer(serializers.ModelSerializer):
@@ -370,7 +465,7 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
         return group.group_name if group else None
 
     def get_is_reviewable(self, obj):
-        return obj.leave_request.status == "submitted"
+        return obj.leave_request.status not in ("draft", "cancelled")
 
     def get_requires_medical_certificate(self, obj):
         return services.requires_medical_certificate(obj.leave_request)
@@ -470,6 +565,8 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
     attachments = LeaveAttachmentSerializer(many=True, read_only=True)
     requires_medical_certificate = serializers.SerializerMethodField()
     medical_certificate_attached = serializers.SerializerMethodField()
+    workflow_steps = LeaveWorkflowStepSerializer(many=True, read_only=True)
+    workflow_history = LeaveWorkflowHistorySerializer(many=True, read_only=True)
 
     class Meta:
         model = LeaveRequest
@@ -486,6 +583,7 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
             "scope", "generated_at", "courses",
             "attachments", "requires_medical_certificate",
             "medical_certificate_attached",
+            "workflow_steps", "workflow_history",
         ]
         read_only_fields = fields
 
@@ -541,3 +639,121 @@ class LeaveCourseReviewWriteSerializer(serializers.Serializer):
         choices=["reviewed", "acknowledged", "rejected"]
     )
     comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class LeaveOpinionWriteSerializer(serializers.Serializer):
+    comment = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class LeaveFinalDecisionWriteSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=["approve", "reject"])
+    comment = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class LeaveReturnWriteSerializer(serializers.Serializer):
+    comment = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class LeaveAdminOverrideWriteSerializer(serializers.Serializer):
+    to_status = serializers.ChoiceField(
+        choices=sorted(services.OVERRIDE_TARGET_STATUSES)
+    )
+    comment = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class LeaveRoleAssignmentSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source="user.username", read_only=True)
+    user_name = serializers.SerializerMethodField()
+    role_type_display = serializers.CharField(
+        source="get_role_type_display", read_only=True
+    )
+    program_name = serializers.CharField(
+        source="program.program_name", read_only=True, default=None
+    )
+    class_group_name = serializers.CharField(
+        source="class_group.group_name", read_only=True, default=None
+    )
+    term_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveRoleAssignment
+        fields = [
+            "id", "user", "user_username", "user_name",
+            "role_type", "role_type_display",
+            "program", "program_name",
+            "class_group", "class_group_name",
+            "academic_term", "term_label",
+            "is_active", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_user_name(self, obj):
+        return _user_display_name(obj.user) or obj.user.username
+
+    def get_term_label(self, obj):
+        if obj.academic_term_id is None:
+            return "ทุกภาคเรียน"
+        term = obj.academic_term
+        return f"{term.academic_year}/{term.get_semester_display()}"
+
+    def validate(self, attrs):
+        instance = self.instance
+        user = attrs.get("user", getattr(instance, "user", None))
+        role_type = attrs.get("role_type", getattr(instance, "role_type", None))
+        program = attrs.get("program", getattr(instance, "program", None))
+        class_group = attrs.get(
+            "class_group", getattr(instance, "class_group", None)
+        )
+        academic_term = attrs.get(
+            "academic_term", getattr(instance, "academic_term", None)
+        )
+        is_active = attrs.get("is_active", getattr(instance, "is_active", True))
+
+        if user is None or not user.is_active:
+            raise serializers.ValidationError(
+                {"user": ["บัญชีผู้รับผิดชอบต้องเปิดใช้งานอยู่"]}
+            )
+        if role_type in ("advisor", "program_head") and user.role != "instructor":
+            raise serializers.ValidationError(
+                {"user": ["บทบาทนี้ต้องมอบหมายให้บัญชีอาจารย์เท่านั้น"]}
+            )
+        if role_type == "final_approver" and user.role not in (
+            "instructor", "admin"
+        ):
+            raise serializers.ValidationError(
+                {"user": ["ผู้มีอำนาจอนุมัติต้องเป็นอาจารย์หรือผู้ดูแลระบบ"]}
+            )
+
+        if class_group is not None and program is not None:
+            if class_group.program_id != program.id:
+                raise serializers.ValidationError(
+                    {"class_group": ["กลุ่มเรียนไม่ได้อยู่ในหลักสูตรที่เลือก"]}
+                )
+        if role_type == "advisor" and program is None and class_group is None:
+            raise serializers.ValidationError(
+                {"program": ["อาจารย์ที่ปรึกษาต้องผูกกับหลักสูตรหรือกลุ่มเรียน"]}
+            )
+        if role_type == "program_head" and program is None:
+            raise serializers.ValidationError(
+                {"program": ["หัวหน้าหน่วยหลักสูตรต้องผูกกับหลักสูตร"]}
+            )
+
+        if is_active:
+            duplicates = LeaveRoleAssignment.objects.filter(
+                role_type=role_type,
+                is_active=True,
+                program=program,
+                class_group=class_group,
+                academic_term=academic_term,
+            )
+            if instance is not None:
+                duplicates = duplicates.exclude(pk=instance.pk)
+            if duplicates.exists():
+                raise serializers.ValidationError(
+                    {"role_type": [
+                        "มีการมอบหมายบทบาทนี้ในขอบเขตเดียวกันอยู่แล้ว "
+                        "— กรุณาปิดใช้งานรายการเดิมก่อน"
+                    ]}
+                )
+        return attrs
+

@@ -7,8 +7,9 @@
  * contains only the offerings they teach. The page is intentionally outside
  * AppShell so browser print output contains only the document.
  *
- * Phase 2 (request-level approvals) can be added as a conditional section
- * under "ความเห็นอาจารย์รายวิชา" without changing this page's data flow.
+ * This page prints the request-level approval workflow (Phase 2: the three
+ * steps and their history) under "ความเห็นอาจารย์รายวิชา". Course reviews
+ * stay separate from the request approval, as the spec requires.
  */
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
@@ -417,6 +418,85 @@ function LeavePrintContent() {
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        <section className="leave-print-avoid-break mt-5">
+          <h2 className="text-sm font-bold">
+            ผลการพิจารณาตามลำดับ (Workflow)
+          </h2>
+          {document.workflow_steps.length === 0 ? (
+            <p className="mt-1 text-xs text-slate-600">
+              ยังไม่มีขั้นตอนการพิจารณา — ระบบจะสร้างขั้นตอนเมื่อส่งคำร้อง
+            </p>
+          ) : (
+            <table className="mt-2 w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <th className={`${headCellClass} w-10`}>ขั้น</th>
+                  <th className={headCellClass}>ผู้พิจารณา</th>
+                  <th className={headCellClass}>ผู้รับผิดชอบ</th>
+                  <th className={headCellClass}>สถานะ</th>
+                  <th className={headCellClass}>ความเห็น / วันเวลา</th>
+                </tr>
+              </thead>
+              <tbody>
+                {document.workflow_steps.map((step) => (
+                  <tr key={step.id} className="leave-print-avoid-break">
+                    <td className={cellClass}>{step.step_order}</td>
+                    <td className={cellClass}>{step.role_type_display}</td>
+                    <td className={cellClass}>
+                      {step.assignee_name ?? "ยังไม่กำหนด"}
+                    </td>
+                    <td className={cellClass}>{step.status_display}</td>
+                    <td className={cellClass}>
+                      {step.comment ? (
+                        <div className="whitespace-pre-wrap">{step.comment}</div>
+                      ) : (
+                        <div className="text-slate-500">—</div>
+                      )}
+                      {step.acted_at && (
+                        <div className="mt-0.5 text-slate-600">
+                          {formatThaiDateTime(step.acted_at)}
+                          {step.acted_by_name ? ` · ${step.acted_by_name}` : ""}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {document.workflow_history.length > 0 && (
+            <div className="mt-3 text-xs">
+              <h3 className="font-bold">ประวัติการดำเนินการ</h3>
+              <ul className="mt-1 list-inside list-disc">
+                {document.workflow_history.map((entry) => (
+                  <li key={entry.id}>
+                    {formatThaiDateTime(entry.created_at)} —{" "}
+                    {entry.action_display}
+                    {entry.actor_name ? ` โดย ${entry.actor_name}` : ""}
+                    {entry.comment ? `: ${entry.comment}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+
+        {document.workflow_steps.length > 0 && (
+          <section className="leave-print-avoid-break mt-6 grid grid-cols-3 gap-4 text-center text-xs">
+            {document.workflow_steps.map((step) => (
+              <div key={step.id}>
+                <p>ลงชื่อ ...........................................</p>
+                <p className="mt-8">({step.assignee_name ?? "...................."})</p>
+                <p>{step.role_type_display}</p>
+                <p className="mt-1">
+                  วันที่ ........... / ........... / ...........
+                </p>
+              </div>
+            ))}
           </section>
         )}
 

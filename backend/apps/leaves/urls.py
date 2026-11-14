@@ -6,6 +6,12 @@ from apps.leaves import views
 router = DefaultRouter()
 router.register("leave-requests", views.LeaveRequestViewSet, basename="leave-request")
 router.register("leave-courses", views.LeaveCourseViewSet, basename="leave-course")
+router.register("leave-approvals", views.LeaveApprovalViewSet, basename="leave-approval")
+router.register(
+    "leave-role-assignments",
+    views.LeaveRoleAssignmentViewSet,
+    basename="leave-role-assignment",
+)
 
 urlpatterns = [
     # Policy + private attachment download are explicit routes (the latter is

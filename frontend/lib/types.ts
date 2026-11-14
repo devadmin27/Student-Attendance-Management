@@ -285,6 +285,68 @@ export interface LeaveCourse {
   updated_at: string;
 }
 
+// ---- Approval workflow (Phase 2) ----
+export type LeaveWorkflowRoleType = "advisor" | "program_head" | "final_approver";
+export type LeaveWorkflowStepStatus = "pending" | "completed" | "skipped";
+export type LeaveWorkflowAction =
+  | "cancel"
+  | "resubmit"
+  | "advisor_opinion"
+  | "program_head_opinion"
+  | "final_decision"
+  | "return"
+  | "admin_override";
+
+export interface LeaveWorkflowStep {
+  id: string;
+  step_order: number;
+  role_type: LeaveWorkflowRoleType;
+  role_type_display: string;
+  assignee: string | null;
+  assignee_name: string | null;
+  assignee_username: string | null;
+  status: LeaveWorkflowStepStatus;
+  status_display: string;
+  acted_by: string | null;
+  acted_by_name: string | null;
+  acted_at: string | null;
+  comment: string;
+  created_at: string;
+}
+
+export interface LeaveWorkflowHistoryEntry {
+  id: string;
+  step_order: number | null;
+  role_type: string;
+  role_type_display: string;
+  action: string;
+  action_display: string;
+  from_status: string;
+  to_status: string;
+  actor: string | null;
+  actor_name: string | null;
+  comment: string;
+  created_at: string;
+}
+
+export interface LeaveRoleAssignment {
+  id: string;
+  user: string;
+  user_username: string;
+  user_name: string;
+  role_type: LeaveWorkflowRoleType;
+  role_type_display: string;
+  program: string | null;
+  program_name: string | null;
+  class_group: string | null;
+  class_group_name: string | null;
+  academic_term: string | null;
+  term_label: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LeaveRequest {
   id: string;
   student: string;
@@ -321,6 +383,10 @@ export interface LeaveRequest {
   courses: LeaveCourse[];
   is_editable: boolean;
   is_cancellable: boolean;
+  workflow_steps: LeaveWorkflowStep[];
+  workflow_history: LeaveWorkflowHistoryEntry[];
+  current_step: LeaveWorkflowStep | null;
+  available_actions: LeaveWorkflowAction[];
   created_at: string;
   updated_at: string;
 }
@@ -426,6 +492,8 @@ export interface LeavePrintDocument {
   requires_medical_certificate: boolean;
   medical_certificate_attached: boolean;
   courses: LeavePrintCourse[];
+  workflow_steps: LeaveWorkflowStep[];
+  workflow_history: LeaveWorkflowHistoryEntry[];
 }
 
 export interface AttendanceRecord {

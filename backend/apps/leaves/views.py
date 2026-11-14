@@ -15,18 +15,57 @@ from rest_framework.views import APIView
 
 from apps.audit.models import log_audit
 from apps.leaves import services
-from apps.leaves.models import LeaveAttachment, LeaveCourse, LeaveRequest
+from apps.leaves.models import (
+    LeaveAttachment,
+    LeaveCourse,
+    LeaveRequest,
+    LeaveRoleAssignment,
+)
 from apps.leaves.serializers import (
+    LeaveAdminOverrideWriteSerializer,
     LeaveAttachmentSerializer,
     LeaveAttachmentWriteSerializer,
     LeaveCourseInboxSerializer,
     LeaveCourseReviewWriteSerializer,
+    LeaveFinalDecisionWriteSerializer,
+    LeaveOpinionWriteSerializer,
     LeaveRequestPrintSerializer,
     LeaveRequestSerializer,
     LeaveRequestWriteSerializer,
+    LeaveReturnWriteSerializer,
+    LeaveRoleAssignmentSerializer,
 )
-from common.permissions import RoleRequired
+from common.permissions import IsAdmin, RoleRequired
 from common.responses import error_response, success_response
+
+
+def leave_request_queryset():
+    """Shared detail prefetch for requests, approvals, and print payloads."""
+    return LeaveRequest.objects.select_related(
+        "student", "student__user", "student__program", "student__class_group"
+    ).prefetch_related(
+        "courses",
+        "courses__course_offering__course",
+        "courses__course_offering__academic_term",
+        "courses__course_offering__class_group",
+        "courses__course_offering__instructor",
+        "courses__course_offering__instructors",
+        "courses__course_offering__schedules",
+        "courses__reviews",
+        "courses__reviews__reviewer",
+        "courses__reviews__reviewer__instructor_profile",
+        "courses__reviewed_by",
+        "courses__reviewed_by__instructor_profile",
+        "attachments",
+        "workflow_steps",
+        "workflow_steps__assignee",
+        "workflow_steps__assignee__instructor_profile",
+        "workflow_steps__acted_by",
+        "workflow_steps__acted_by__instructor_profile",
+        "workflow_history",
+        "workflow_history__actor",
+        "workflow_history__actor__instructor_profile",
+    )
 
 
 class LeaveRequestViewSet(viewsets.GenericViewSet):
@@ -52,21 +91,7 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return LeaveRequest.objects.none()
-        qs = LeaveRequest.objects.select_related(
-            "student", "student__program", "student__class_group"
-        ).prefetch_related(
-            "courses",
-            "courses__course_offering__course",
-            "courses__course_offering__academic_term",
-            "courses__course_offering__class_group",
-            "courses__course_offering__schedules",
-            "courses__reviews",
-            "courses__reviews__reviewer",
-            "courses__reviews__reviewer__instructor_profile",
-            "courses__reviewed_by",
-            "courses__reviewed_by__instructor_profile",
-            "attachments",
-        )
+        qs = leave_request_queryset()
         user = self.request.user
         if user.role == "admin":
             return qs
@@ -150,13 +175,41 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
                 "ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว", "PERMISSION_DENIED",
                 status.HTTP_403_FORBIDDEN,
             )
-        services.submit_leave_request(instance)
+        instance = services.submit_leave_request(instance, actor=request.user)
         log_audit(
             request.user, "leave_submit", "leave_request", instance.pk,
-            metadata={"course_count": instance.courses.count()}, request=request,
+            metadata={
+                "course_count": instance.courses.count(),
+                "status": instance.status,
+            },
+            request=request,
         )
-        data = LeaveRequestSerializer(instance, context={"request": request}).data
+        instance = self.get_queryset().get(pk=instance.pk)
+        data = LeaveRequestSerializer(
+            instance, context={"request": request}
+        ).data
         return success_response(data, "ส่งคำร้องลาสำเร็จ")
+
+    @action(detail=True, methods=["post"], url_path="resubmit")
+    def resubmit(self, request, pk=None):
+        instance = self.get_object()
+        if request.user.role != "student":
+            return error_response(
+                "ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว", "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+        instance = services.resubmit_leave_request(
+            instance, actor=request.user
+        )
+        log_audit(
+            request.user, "leave_resubmit", "leave_request", instance.pk,
+            metadata={"status": instance.status}, request=request,
+        )
+        instance = self.get_queryset().get(pk=instance.pk)
+        data = LeaveRequestSerializer(
+            instance, context={"request": request}
+        ).data
+        return success_response(data, "ส่งคำร้องลาอีกครั้งสำเร็จ")
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
@@ -167,13 +220,61 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
                 status.HTTP_403_FORBIDDEN,
             )
         old_status = instance.status
-        services.cancel_leave_request(instance)
+        instance = services.cancel_leave_request(
+            instance, actor=request.user
+        )
         log_audit(
             request.user, "leave_cancel", "leave_request", instance.pk,
-            metadata={"from": old_status, "to": instance.status}, request=request,
+            metadata={"from": old_status, "to": instance.status},
+            request=request,
         )
-        data = LeaveRequestSerializer(instance, context={"request": request}).data
+        instance = self.get_queryset().get(pk=instance.pk)
+        data = LeaveRequestSerializer(
+            instance, context={"request": request}
+        ).data
         return success_response(data, "ยกเลิกคำร้องลาสำเร็จ")
+
+    @action(detail=True, methods=["get"], url_path="history")
+    def history(self, request, pk=None):
+        instance = self.get_object()
+        return success_response(
+            LeaveRequestSerializer(
+                instance, context={"request": request}
+            ).data["workflow_history"],
+            "โหลดประวัติการพิจารณาสำเร็จ",
+        )
+
+    @action(detail=True, methods=["post"], url_path="admin-override")
+    def admin_override(self, request, pk=None):
+        if request.user.role != "admin":
+            return error_response(
+                "เฉพาะผู้ดูแลระบบเท่านั้น", "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+        instance = self.get_object()
+        serializer = LeaveAdminOverrideWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        old_status = instance.status
+        instance = services.admin_override(
+            instance,
+            request.user,
+            serializer.validated_data["to_status"],
+            serializer.validated_data["comment"],
+        )
+        log_audit(
+            request.user, "leave_admin_override", "leave_request", instance.pk,
+            metadata={
+                "from": old_status,
+                "to": instance.status,
+                "comment": serializer.validated_data["comment"],
+            },
+            request=request,
+        )
+        instance = self.get_queryset().get(pk=instance.pk)
+        data = LeaveRequestSerializer(
+            instance, context={"request": request}
+        ).data
+        return success_response(data, "ดำเนินการแทนสำเร็จ")
 
     @action(detail=True, methods=["get", "post"], url_path="attachments")
     def attachments(self, request, pk=None):
@@ -371,6 +472,216 @@ class LeaveCourseViewSet(viewsets.GenericViewSet):
         return success_response(data, "บันทึกผลการพิจารณารายวิชาสำเร็จ")
 
 
+class LeaveApprovalViewSet(viewsets.GenericViewSet):
+    """Approval inbox and decision endpoints (advisor/head/final approver).
+
+    Instructors only see requests where they are (or were) an assignee;
+    admins see every in-flight request so the documented exception path can
+    be used. Every action re-checks the current step and assignee in the
+    service layer.
+    """
+
+    permission_classes = [RoleRequired]
+    allowed_roles = {"instructor", "admin"}
+    serializer_class = LeaveRequestSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = {
+        "status": ["exact"],
+        "leave_type": ["exact"],
+        "student": ["exact"],
+        "start_date": ["gte", "lte"],
+        "end_date": ["gte", "lte"],
+    }
+    search_fields = [
+        "student__student_code", "student__first_name", "student__last_name",
+        "reason",
+    ]
+    ordering_fields = ["submitted_at", "start_date", "created_at"]
+    ordering = ["submitted_at", "created_at"]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return LeaveRequest.objects.none()
+        qs = leave_request_queryset()
+        user = self.request.user
+        if user.role == "admin":
+            return qs
+        return qs.filter(workflow_steps__assignee=user).distinct()
+
+    def _inbox_queryset(self):
+        qs = self.filter_queryset(self.get_queryset()).filter(
+            status__in=services.PENDING_STATUSES
+        )
+        user = self.request.user
+        if user.role != "admin":
+            condition = Q()
+            for _order, role_type, step_status in services.WORKFLOW_STEPS:
+                condition |= Q(
+                    status=step_status,
+                    workflow_steps__role_type=role_type,
+                    workflow_steps__status="pending",
+                    workflow_steps__assignee=user,
+                )
+            qs = qs.filter(condition).distinct()
+        return qs
+
+    def list(self, request):
+        queryset = self._inbox_queryset()
+        page = self.paginate_queryset(queryset)
+        serializer = LeaveRequestSerializer(
+            page if page is not None else queryset, many=True,
+            context={"request": request},
+        )
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return success_response(serializer.data, "โหลดคิวอนุมัติสำเร็จ")
+
+    def retrieve(self, request, pk=None):
+        instance = self.get_object()
+        serializer = LeaveRequestSerializer(
+            instance, context={"request": request}
+        )
+        return success_response(serializer.data, "โหลดคำร้องลาสำเร็จ")
+
+    def _serialize(self, instance):
+        instance = self.get_queryset().get(pk=instance.pk)
+        return LeaveRequestSerializer(
+            instance, context={"request": self.request}
+        ).data
+
+    @action(detail=True, methods=["post"], url_path="advisor-opinion")
+    def advisor_opinion(self, request, pk=None):
+        instance = self.get_object()
+        serializer = LeaveOpinionWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = services.record_advisor_opinion(
+            instance, request.user, serializer.validated_data["comment"]
+        )
+        log_audit(
+            request.user, "leave_advisor_opinion", "leave_request", instance.pk,
+            metadata={"status": instance.status}, request=request,
+        )
+        return success_response(
+            self._serialize(instance), "บันทึกความเห็นอาจารย์ที่ปรึกษาสำเร็จ"
+        )
+
+    @action(detail=True, methods=["post"], url_path="program-head-opinion")
+    def program_head_opinion(self, request, pk=None):
+        instance = self.get_object()
+        serializer = LeaveOpinionWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = services.record_program_head_opinion(
+            instance, request.user, serializer.validated_data["comment"]
+        )
+        log_audit(
+            request.user, "leave_program_head_opinion", "leave_request",
+            instance.pk, metadata={"status": instance.status}, request=request,
+        )
+        return success_response(
+            self._serialize(instance),
+            "บันทึกความเห็นหัวหน้าหน่วยหลักสูตรสำเร็จ",
+        )
+
+    @action(detail=True, methods=["post"], url_path="final-decision")
+    def final_decision(self, request, pk=None):
+        instance = self.get_object()
+        serializer = LeaveFinalDecisionWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = services.record_final_decision(
+            instance,
+            request.user,
+            serializer.validated_data["decision"],
+            serializer.validated_data.get("comment", ""),
+        )
+        log_audit(
+            request.user, "leave_final_decision", "leave_request", instance.pk,
+            metadata={
+                "decision": serializer.validated_data["decision"],
+                "status": instance.status,
+            },
+            request=request,
+        )
+        return success_response(
+            self._serialize(instance), "บันทึกผลการพิจารณาสำเร็จ"
+        )
+
+    @action(detail=True, methods=["post"], url_path="return")
+    def return_for_revision(self, request, pk=None):
+        instance = self.get_object()
+        serializer = LeaveReturnWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = services.return_for_revision(
+            instance, request.user, serializer.validated_data["comment"]
+        )
+        log_audit(
+            request.user, "leave_return", "leave_request", instance.pk,
+            metadata={"status": instance.status}, request=request,
+        )
+        return success_response(
+            self._serialize(instance), "ส่งกลับเพื่อแก้ไขสำเร็จ"
+        )
+
+
+class LeaveRoleAssignmentViewSet(viewsets.ModelViewSet):
+    """Admin-only workflow role assignments (Phase 2)."""
+
+    queryset = LeaveRoleAssignment.objects.select_related(
+        "user", "program", "class_group", "academic_term"
+    )
+    serializer_class = LeaveRoleAssignmentSerializer
+    permission_classes = [IsAdmin]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = {
+        "role_type": ["exact"],
+        "program": ["exact"],
+        "class_group": ["exact"],
+        "academic_term": ["exact"],
+        "is_active": ["exact"],
+    }
+    search_fields = [
+        "user__username", "user__email",
+        "program__program_code", "program__program_name",
+        "class_group__group_code", "class_group__group_name",
+    ]
+    ordering_fields = ["role_type", "user__username", "created_at"]
+    ordering = ["role_type", "user__username"]
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        services.backfill_pending_step_assignees(instance.role_type)
+        log_audit(
+            self.request.user, "leave_role_assignment_create",
+            "leave_role_assignment", instance.pk,
+            metadata={
+                "role_type": instance.role_type,
+                "user": str(instance.user_id),
+            },
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        services.backfill_pending_step_assignees(instance.role_type)
+        log_audit(
+            self.request.user, "leave_role_assignment_update",
+            "leave_role_assignment", instance.pk,
+            metadata={
+                "role_type": instance.role_type,
+                "is_active": instance.is_active,
+            },
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        log_audit(
+            self.request.user, "leave_role_assignment_delete",
+            "leave_role_assignment", instance.pk,
+            metadata={"role_type": instance.role_type},
+            request=self.request,
+        )
+        instance.delete()
+
+
 class LeaveRequestPrintView(APIView):
     """Read-only A4 document data for students, instructors, and admins.
 
@@ -384,21 +695,7 @@ class LeaveRequestPrintView(APIView):
     allowed_roles = {"student", "instructor", "admin"}
 
     def get(self, request, pk):
-        queryset = LeaveRequest.objects.select_related(
-            "student", "student__program", "student__class_group"
-        ).prefetch_related(
-            "courses",
-            "courses__course_offering__course",
-            "courses__course_offering__academic_term",
-            "courses__course_offering__class_group",
-            "courses__course_offering__instructor",
-            "courses__course_offering__instructors",
-            "courses__course_offering__schedules",
-            "courses__reviews",
-            "courses__reviews__reviewer",
-            "courses__reviews__reviewer__instructor_profile",
-            "attachments",
-        )
+        queryset = leave_request_queryset()
         role = request.user.role
         if role == "admin":
             instance = get_object_or_404(queryset, pk=pk)

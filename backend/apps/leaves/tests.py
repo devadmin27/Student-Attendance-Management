@@ -10,6 +10,7 @@ from rest_framework import status
 
 from apps.accounts.models import User
 from apps.accounts.tests import BaseSamsTest
+from apps.academics.models import Program
 from apps.attendance.models import AttendanceRecord, AttendanceSession
 from apps.audit.models import AuditLog
 from apps.courses.models import Course, CourseOffering, Enrollment
@@ -18,6 +19,9 @@ from apps.leaves.models import (
     LeaveCourse,
     LeaveCourseReview,
     LeaveRequest,
+    LeaveRoleAssignment,
+    LeaveWorkflowHistory,
+    LeaveWorkflowStep,
 )
 from apps.schedules.models import ClassSchedule
 
@@ -27,7 +31,50 @@ TEST_MEDIA_ROOT = tempfile.mkdtemp(prefix="sams-leave-tests-")
 
 @override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class LeaveTestBase(BaseSamsTest):
-    """Base fixture plus a class 09:00–11:00 on a date a week from today."""
+    """Base fixture plus a class 09:00–11:00 on a date a week from today.
+
+    Phase 2 approval roles are assigned in `setUpTestData` so that submitting
+    a draft always resolves the three workflow steps. Individual tests may
+    deactivate or replace an assignment to exercise the missing-assignment
+    path.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.advisor_user = User.objects.create_user(
+            "advisor1", "advisor1@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        cls.advisor = cls.advisor_user.instructor_profile
+        cls.advisor.first_name = "ที่ปรึกษา"
+        cls.advisor.last_name = "ทดสอบ"
+        cls.advisor.save()
+
+        cls.head_user = User.objects.create_user(
+            "head1", "head1@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        cls.head = cls.head_user.instructor_profile
+        cls.head.first_name = "หัวหน้า"
+        cls.head.last_name = "หลักสูตร"
+        cls.head.save()
+
+        cls.approver_user = User.objects.create_user(
+            "approver1", "approver1@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        cls.approver = cls.approver_user.instructor_profile
+        cls.approver.first_name = "ผู้อนุมัติ"
+        cls.approver.last_name = "ทดสอบ"
+        cls.approver.save()
+
+        LeaveRoleAssignment.objects.create(
+            role_type="advisor", user=cls.advisor_user, program=cls.program
+        )
+        LeaveRoleAssignment.objects.create(
+            role_type="program_head", user=cls.head_user, program=cls.program
+        )
+        LeaveRoleAssignment.objects.create(
+            role_type="final_approver", user=cls.approver_user
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -106,6 +153,55 @@ class LeaveTestBase(BaseSamsTest):
         )
         self.assertEqual(response.status_code, 200, response.data)
         return response.data["data"]
+
+    # -- Phase 2 workflow helpers ------------------------------------------
+    def advisor_opinion(self, request_id, comment="เห็นควรอนุญาต"):
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        return self.client.post(
+            f"/api/v1/leave-approvals/{request_id}/advisor-opinion/",
+            {"comment": comment},
+            format="json",
+        )
+
+    def program_head_opinion(self, request_id, comment="เห็นชอบตามเสนอ"):
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        return self.client.post(
+            f"/api/v1/leave-approvals/{request_id}/program-head-opinion/",
+            {"comment": comment},
+            format="json",
+        )
+
+    def final_decision(self, request_id, decision="approve", comment=""):
+        self.auth_user(self.approver_user, "Str0ngTeach!Pass")
+        return self.client.post(
+            f"/api/v1/leave-approvals/{request_id}/final-decision/",
+            {"decision": decision, "comment": comment},
+            format="json",
+        )
+
+    def advance_to_final_approval(self, request_id):
+        advisor = self.advisor_opinion(request_id)
+        self.assertEqual(advisor.status_code, 200, advisor.data)
+        head = self.program_head_opinion(request_id)
+        self.assertEqual(head.status_code, 200, head.data)
+        return head.data["data"]
+
+    def upload_attachment(
+        self,
+        request_id,
+        name="medical-certificate.pdf",
+        content_type="application/pdf",
+        attachment_type="medical_certificate",
+    ):
+        upload = SimpleUploadedFile(
+            name, b"%PDF-1.4\nSAMS test certificate\n", content_type=content_type
+        )
+        return self.client.post(
+            f"/api/v1/leave-requests/{request_id}/attachments/",
+            {"file": upload, "attachment_type": attachment_type},
+            format="multipart",
+        )
+
 
 
 class LeaveSubmissionTests(LeaveTestBase):
@@ -205,7 +301,7 @@ class LeaveSubmissionTests(LeaveTestBase):
     def test_submit_then_cancel_and_no_double_submit(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")
         request_data = self.create_submitted()
-        self.assertEqual(request_data["status"], "submitted")
+        self.assertEqual(request_data["status"], "pending_advisor_review")
         self.assertIsNotNone(request_data["submitted_at"])
 
         again = self.client.post(
@@ -344,7 +440,7 @@ class LeaveSubmissionPolicyTests(LeaveTestBase):
         )
         response = self._submit(draft.data["data"]["id"])
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data["data"]["status"], "submitted")
+        self.assertEqual(response.data["data"]["status"], "pending_advisor_review")
 
     def test_sick_leave_grace_period_requires_a_reason(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")
@@ -630,7 +726,7 @@ class LeaveCourseReviewTests(LeaveTestBase):
         self.assertEqual(response.data["data"]["review_status"], "reviewed")
 
         leave_request = LeaveRequest.objects.get(pk=request_data["id"])
-        self.assertEqual(leave_request.status, "submitted")
+        self.assertEqual(leave_request.status, "pending_advisor_review")
         self.assertEqual(LeaveCourseReview.objects.count(), 1)
         self.assertTrue(
             AuditLog.objects.filter(action="leave_course_review").exists()
@@ -765,7 +861,7 @@ class LeaveAttendanceIntegrationTests(LeaveTestBase):
 
         row = self._roster()
         self.assertEqual(row["checked_in_status"], "absent")
-        self.assertEqual(row["leave_status"], "submitted")
+        self.assertEqual(row["leave_status"], "pending_advisor_review")
         self.assertEqual(row["leave_type"], "personal")
         self.assertEqual(row["leave_request_count"], 1)
 
@@ -785,7 +881,7 @@ class LeaveAttendanceIntegrationTests(LeaveTestBase):
         request_data.end_time = None
         request_data.save(update_fields=["start_time", "end_time"])
         row = self._roster()
-        self.assertEqual(row["leave_status"], "submitted")
+        self.assertEqual(row["leave_status"], "pending_advisor_review")
 
     def test_cancelled_or_draft_leave_is_not_shown(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")
@@ -796,7 +892,7 @@ class LeaveAttendanceIntegrationTests(LeaveTestBase):
         self.auth_user(self.student_user, "Str0ngStud!Pass")
         submitted = self.create_submitted()
         row = self._roster()
-        self.assertEqual(row["leave_status"], "submitted")
+        self.assertEqual(row["leave_status"], "pending_advisor_review")
 
         self.auth_user(self.student_user, "Str0ngStud!Pass")
         self.client.post(f"/api/v1/leave-requests/{submitted['id']}/cancel/", {})
@@ -809,7 +905,7 @@ class LeaveAttendanceIntegrationTests(LeaveTestBase):
         self.create_submitted()
         self.create_submitted(reason="คำร้องที่สอง")
         row = self._roster()
-        self.assertEqual(row["leave_status"], "submitted")
+        self.assertEqual(row["leave_status"], "pending_advisor_review")
         self.assertEqual(row["leave_request_count"], 2)
 
     def test_other_offering_leave_does_not_appear(self):
@@ -833,7 +929,7 @@ class LeavePrintTests(LeaveTestBase):
         document = response.data["data"]
         self.assertEqual(document["scope"], "full")
         self.assertEqual(document["student_code"], "640001")
-        self.assertEqual(document["status_display"], "ส่งคำร้องแล้ว")
+        self.assertEqual(document["status_display"], "รอความเห็นอาจารย์ที่ปรึกษา")
         self.assertTrue(document["generated_at"])
         self.assertEqual(len(document["courses"]), 1)
         self.assertTrue(document["courses"][0]["instructor_names"])
@@ -949,3 +1045,670 @@ class LeavePrintTests(LeaveTestBase):
             response.status_code,
             (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
         )
+
+
+class LeaveWorkflowSubmissionTests(LeaveTestBase):
+    """Phase 2 — submitting a draft creates the three-step workflow."""
+
+    def test_submit_creates_steps_assignees_history_and_actions(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+
+        self.assertEqual(submitted["status"], "pending_advisor_review")
+        self.assertEqual(
+            [step["role_type"] for step in submitted["workflow_steps"]],
+            ["advisor", "program_head", "final_approver"],
+        )
+        self.assertEqual(
+            [str(step["assignee"]) for step in submitted["workflow_steps"]],
+            [
+                str(self.advisor_user.id),
+                str(self.head_user.id),
+                str(self.approver_user.id),
+            ],
+        )
+        self.assertTrue(
+            all(step["status"] == "pending" for step in submitted["workflow_steps"])
+        )
+        self.assertEqual(submitted["current_step"]["role_type"], "advisor")
+        self.assertEqual(submitted["workflow_history"][-1]["action"], "submit")
+        self.assertEqual(
+            submitted["workflow_history"][-1]["actor"], self.student_user.id
+        )
+        self.assertIn("cancel", submitted["available_actions"])
+        self.assertNotIn("resubmit", submitted["available_actions"])
+        self.assertTrue(AuditLog.objects.filter(action="leave_submit").exists())
+        self.assertEqual(LeaveWorkflowStep.objects.count(), 3)
+
+    def test_submit_is_blocked_when_a_role_assignment_is_missing(self):
+        LeaveRoleAssignment.objects.filter(role_type="program_head").update(
+            is_active=False
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft().data["data"]
+        response = self.client.post(
+            f"/api/v1/leave-requests/{draft['id']}/submit/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("workflow", response.data["errors"])
+        self.assertIn(
+            "หัวหน้าหน่วยหลักสูตร", response.data["errors"]["workflow"][0]
+        )
+        stored = LeaveRequest.objects.get(pk=draft["id"])
+        self.assertEqual(stored.status, "draft")
+        self.assertEqual(stored.workflow_steps.count(), 0)
+
+    def test_more_specific_class_group_assignment_wins(self):
+        specific = User.objects.create_user(
+            "advisor-group", "ag@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        specific.instructor_profile.first_name = "ที่ปรึกษาเฉพาะกลุ่ม"
+        specific.instructor_profile.save()
+        LeaveRoleAssignment.objects.create(
+            role_type="advisor",
+            user=specific,
+            program=self.program,
+            class_group=self.group,
+        )
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        advisor_step = next(
+            step for step in submitted["workflow_steps"]
+            if step["role_type"] == "advisor"
+        )
+        self.assertEqual(advisor_step["assignee"], specific.id)
+
+    def test_sick_request_sets_assignees_as_well(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        today = timezone.localdate()
+        submitted = self.create_submitted(
+            leave_type="sick",
+            start_date=(today - timedelta(days=1)).isoformat(),
+            end_date=today.isoformat(),
+        )
+        self.assertEqual(submitted["status"], "pending_advisor_review")
+        self.assertEqual(len(submitted["workflow_steps"]), 3)
+
+
+class LeaveWorkflowApprovalTests(LeaveTestBase):
+    """Phase 2 — sequential approval, RBAC, return/resubmit, admin override."""
+
+    def setUp(self):
+        super().setUp()
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self.request_data = self.create_submitted()
+        self.request_id = self.request_data["id"]
+
+    def test_full_approval_flow_in_order(self):
+        advisor = self.advisor_opinion(self.request_id, "เห็นควรอนุญาต")
+        self.assertEqual(advisor.status_code, 200, advisor.data)
+        body = advisor.data["data"]
+        self.assertEqual(body["status"], "pending_program_head_review")
+        self.assertEqual(body["workflow_steps"][0]["status"], "completed")
+        self.assertEqual(body["workflow_steps"][0]["acted_by"], self.advisor_user.id)
+
+        # The programme head now sees the new action set.
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        head_view = self.client.get(f"/api/v1/leave-approvals/{self.request_id}/")
+        self.assertEqual(head_view.status_code, 200, head_view.data)
+        self.assertIn("program_head_opinion", head_view.data["data"]["available_actions"])
+        self.assertIn("return", head_view.data["data"]["available_actions"])
+
+        head = self.program_head_opinion(self.request_id, "เห็นชอบตามเสนอ")
+        self.assertEqual(head.status_code, 200, head.data)
+        body = head.data["data"]
+        self.assertEqual(body["status"], "pending_final_approval")
+        self.assertEqual(body["workflow_steps"][0]["status"], "completed")
+        self.assertEqual(body["workflow_steps"][1]["status"], "completed")
+
+        self.auth_user(self.approver_user, "Str0ngTeach!Pass")
+        approver_view = self.client.get(f"/api/v1/leave-approvals/{self.request_id}/")
+        self.assertEqual(approver_view.status_code, 200, approver_view.data)
+        self.assertIn(
+            "final_decision", approver_view.data["data"]["available_actions"]
+        )
+
+        final = self.final_decision(self.request_id, "approve", "อนุญาต")
+        self.assertEqual(final.status_code, 200, final.data)
+        body = final.data["data"]
+        self.assertEqual(body["status"], "approved")
+        self.assertEqual(
+            [step["status"] for step in body["workflow_steps"]],
+            ["completed", "completed", "completed"],
+        )
+        self.assertEqual(
+            [entry["action"] for entry in body["workflow_history"]],
+            ["submit", "advisor_opinion", "program_head_opinion", "approve"],
+        )
+        self.assertEqual(body["workflow_history"][-1]["actor"], self.approver_user.id)
+        self.assertNotIn("cancel", body["available_actions"])
+
+        for action in (
+            "leave_submit",
+            "leave_advisor_opinion",
+            "leave_program_head_opinion",
+            "leave_final_decision",
+        ):
+            self.assertTrue(AuditLog.objects.filter(action=action).exists(), action)
+
+    def test_steps_cannot_be_skipped_and_unrelated_staff_cannot_act(self):
+        # The programme head cannot act during the advisor step.
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        early = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/program-head-opinion/",
+            {"comment": "ข้ามขั้นตอน"},
+            format="json",
+        )
+        self.assertEqual(early.status_code, 400, early.data)
+
+        # The final approver cannot decide before both opinions exist.
+        self.auth_user(self.approver_user, "Str0ngTeach!Pass")
+        early = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/final-decision/",
+            {"decision": "approve"},
+            format="json",
+        )
+        self.assertEqual(early.status_code, 400, early.data)
+
+        # An instructor who is not an assignee cannot even see the request.
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/leave-approvals/{self.request_id}/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-approvals/{self.request_id}/advisor-opinion/",
+                {"comment": "ไม่ใช่ที่ปรึกษา"},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        # The assigned advisor still cannot act out of turn once advanced.
+        self.assertEqual(self.advisor_opinion(self.request_id).status_code, 200)
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        again = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/advisor-opinion/",
+            {"comment": "ซ้ำ"},
+            format="json",
+        )
+        self.assertEqual(again.status_code, 400, again.data)
+
+    def test_intermediate_opinion_requires_a_comment(self):
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        response = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/advisor-opinion/",
+            {"comment": "   "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("comment", response.data["errors"])
+
+    def test_reject_requires_reason_and_marks_all_steps(self):
+        self.advance_to_final_approval(self.request_id)
+
+        missing = self.final_decision(self.request_id, "reject", "")
+        self.assertEqual(missing.status_code, 400, missing.data)
+        self.assertIn("comment", missing.data["errors"])
+
+        rejected = self.final_decision(
+            self.request_id, "reject", "เอกสารไม่ครบตามระเบียบ"
+        )
+        self.assertEqual(rejected.status_code, 200, rejected.data)
+        body = rejected.data["data"]
+        self.assertEqual(body["status"], "rejected")
+        self.assertEqual(body["workflow_steps"][-1]["comment"], "เอกสารไม่ครบตามระเบียบ")
+        self.assertTrue(AuditLog.objects.filter(action="leave_final_decision").exists())
+
+    def test_return_for_revision_then_edit_and_resubmit(self):
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        returned = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/return/",
+            {"comment": "กรุณาแนบใบรับรองแพทย์"},
+            format="json",
+        )
+        self.assertEqual(returned.status_code, 200, returned.data)
+        self.assertEqual(returned.data["data"]["status"], "returned")
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        detail = self.client.get(f"/api/v1/leave-requests/{self.request_id}/")
+        self.assertEqual(detail.status_code, 200, detail.data)
+        self.assertTrue(detail.data["data"]["is_editable"])
+        self.assertIn("resubmit", detail.data["data"]["available_actions"])
+        self.assertIn("cancel", detail.data["data"]["available_actions"])
+
+        edited = self.client.patch(
+            f"/api/v1/leave-requests/{self.request_id}/",
+            {"reason": "แก้ไขเหตุผลตามคำแนะนำ"},
+            format="json",
+        )
+        self.assertEqual(edited.status_code, 200, edited.data)
+
+        upload = self.upload_attachment(self.request_id)
+        self.assertEqual(upload.status_code, 201, upload.data)
+
+        resubmitted = self.client.post(
+            f"/api/v1/leave-requests/{self.request_id}/resubmit/", {}
+        )
+        self.assertEqual(resubmitted.status_code, 200, resubmitted.data)
+        body = resubmitted.data["data"]
+        self.assertEqual(body["status"], "pending_advisor_review")
+        self.assertEqual(
+            [step["status"] for step in body["workflow_steps"]],
+            ["pending", "pending", "pending"],
+        )
+        self.assertTrue(
+            all(step["acted_by"] is None for step in body["workflow_steps"])
+        )
+        self.assertEqual(
+            [entry["action"] for entry in body["workflow_history"]],
+            ["submit", "return", "resubmit"],
+        )
+        self.assertTrue(AuditLog.objects.filter(action="leave_resubmit").exists())
+
+    def test_final_approver_cannot_send_back(self):
+        self.advance_to_final_approval(self.request_id)
+        self.auth_user(self.approver_user, "Str0ngTeach!Pass")
+        response = self.client.post(
+            f"/api/v1/leave-approvals/{self.request_id}/return/",
+            {"comment": "ขอให้แก้ไข"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_cancel_during_review_skips_all_pending_steps(self):
+        self.assertEqual(self.advisor_opinion(self.request_id).status_code, 200)
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        cancelled = self.client.post(
+            f"/api/v1/leave-requests/{self.request_id}/cancel/", {}
+        )
+        self.assertEqual(cancelled.status_code, 200, cancelled.data)
+        body = cancelled.data["data"]
+        self.assertEqual(body["status"], "cancelled")
+        self.assertEqual(body["workflow_steps"][0]["status"], "completed")
+        self.assertEqual(body["workflow_steps"][1]["status"], "skipped")
+        self.assertEqual(body["workflow_steps"][2]["status"], "skipped")
+        self.assertNotIn("cancel", body["available_actions"])
+
+        # A cancelled request is no longer actionable and leaves the inbox.
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-approvals/").data["data"], []
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-requests/{self.request_id}/cancel/", {}
+            ).status_code,
+            400,
+        )
+
+    def test_cannot_cancel_after_final_decision(self):
+        self.advance_to_final_approval(self.request_id)
+        self.assertEqual(
+            self.final_decision(self.request_id, "approve", "อนุมัติ").status_code, 200
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-requests/{self.request_id}/cancel/", {}
+            ).status_code,
+            400,
+        )
+
+    def test_approval_inbox_is_scoped_to_the_current_step(self):
+        # Step 1: only the advisor (and admin) sees the request.
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        self.assertEqual(len(self.client.get("/api/v1/leave-approvals/").data["data"]), 1)
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        self.assertEqual(self.client.get("/api/v1/leave-approvals/").data["data"], [])
+        self.auth_user(self.approver_user, "Str0ngTeach!Pass")
+        self.assertEqual(self.client.get("/api/v1/leave-approvals/").data["data"], [])
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        self.assertEqual(len(self.client.get("/api/v1/leave-approvals/").data["data"]), 1)
+
+        # Step 2: the inbox moves to the programme head.
+        self.assertEqual(self.advisor_opinion(self.request_id).status_code, 200)
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        self.assertEqual(self.client.get("/api/v1/leave-approvals/").data["data"], [])
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        self.assertEqual(len(self.client.get("/api/v1/leave-approvals/").data["data"]), 1)
+
+        # Students never get an approval inbox.
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-approvals/").status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_admin_override_requires_reason_and_audit_trail(self):
+        self.assertEqual(self.advisor_opinion(self.request_id).status_code, 200)
+
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        missing = self.client.post(
+            f"/api/v1/leave-requests/{self.request_id}/admin-override/",
+            {"to_status": "approved", "comment": ""},
+            format="json",
+        )
+        self.assertEqual(missing.status_code, 400, missing.data)
+
+        overridden = self.client.post(
+            f"/api/v1/leave-requests/{self.request_id}/admin-override/",
+            {
+                "to_status": "approved",
+                "comment": "ผู้ดูแลระบบอนุมัติแทนเนื่องจากผู้รับผิดชอบไม่ว่าง",
+            },
+            format="json",
+        )
+        self.assertEqual(overridden.status_code, 200, overridden.data)
+        body = overridden.data["data"]
+        self.assertEqual(body["status"], "approved")
+        self.assertEqual(body["workflow_steps"][1]["status"], "skipped")
+        self.assertEqual(body["workflow_steps"][2]["status"], "skipped")
+        self.assertEqual(body["workflow_history"][-1]["action"], "admin_override")
+        self.assertEqual(
+            body["workflow_history"][-1]["actor"], self.admin_user.id
+        )
+        self.assertTrue(AuditLog.objects.filter(action="leave_admin_override").exists())
+
+        # A finished request can no longer be overridden.
+        again = self.client.post(
+            f"/api/v1/leave-requests/{self.request_id}/admin-override/",
+            {"to_status": "rejected", "comment": "เปลี่ยนผล"},
+            format="json",
+        )
+        self.assertEqual(again.status_code, 400, again.data)
+
+    def test_non_admin_cannot_use_admin_override(self):
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-requests/{self.request_id}/admin-override/",
+                {"to_status": "approved", "comment": "ข้ามขั้น"},
+                format="json",
+            ).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+
+class LeaveRoleAssignmentTests(LeaveTestBase):
+    """Phase 2 — admin-managed workflow roles."""
+
+    def test_only_admin_manages_assignments(self):
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-role-assignments/").status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-role-assignments/").status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.client.get("/api/v1/leave-role-assignments/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data["data"]), 3)
+
+    def test_assignment_validation_rules(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+
+        # Advisor / programme head must be instructor accounts.
+        bad_user = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {
+                "role_type": "advisor",
+                "user": str(self.student_user.id),
+                "program": str(self.program.id),
+            },
+            format="json",
+        )
+        self.assertEqual(bad_user.status_code, 400, bad_user.data)
+        self.assertIn("user", bad_user.data["errors"])
+
+        # A programme head must be scoped to a programme.
+        no_program = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {"role_type": "program_head", "user": str(self.head_user.id)},
+            format="json",
+        )
+        self.assertEqual(no_program.status_code, 400, no_program.data)
+        self.assertIn("program", no_program.data["errors"])
+
+        # Duplicate active scope is rejected.
+        duplicate = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {
+                "role_type": "advisor",
+                "user": str(self.advisor_user.id),
+                "program": str(self.program.id),
+            },
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 400, duplicate.data)
+        self.assertIn("role_type", duplicate.data["errors"])
+
+        # Class group must belong to the selected programme.
+        other_program = Program.objects.create(
+            program_code="ME", program_name="วิศวกรรมเครื่องกล"
+        )
+        mismatch = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {
+                "role_type": "advisor",
+                "user": str(self.advisor_user.id),
+                "program": str(other_program.id),
+                "class_group": str(self.group.id),
+            },
+            format="json",
+        )
+        self.assertEqual(mismatch.status_code, 400, mismatch.data)
+        self.assertIn("class_group", mismatch.data["errors"])
+
+        # The final approver may be a global admin assignment.
+        final = LeaveRoleAssignment.objects.get(role_type="final_approver")
+        updated = self.client.patch(
+            f"/api/v1/leave-role-assignments/{final.id}/",
+            {"user": str(self.admin_user.id)},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(updated.data["user"], self.admin_user.id)
+
+    def test_creating_assignment_backfills_unresolved_pending_steps(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        LeaveWorkflowStep.objects.filter(
+            leave_request_id=submitted["id"], role_type="program_head"
+        ).update(assignee=None)
+        LeaveRoleAssignment.objects.filter(role_type="program_head").update(
+            is_active=False
+        )
+
+        replacement = User.objects.create_user(
+            "head2", "head2@x.ac.th", "Str0ngTeach!Pass", role="instructor"
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        created = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {
+                "role_type": "program_head",
+                "user": str(replacement.id),
+                "program": str(self.program.id),
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        step = LeaveWorkflowStep.objects.get(
+            leave_request_id=submitted["id"], role_type="program_head"
+        )
+        self.assertEqual(step.assignee_id, replacement.id)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="leave_role_assignment_create"
+            ).exists()
+        )
+
+    def test_legacy_submitted_request_can_be_progressed_after_assignment(self):
+        """Phase 1 rows upgraded by migration 0004 (status submitted)."""
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft().data["data"]
+        request = LeaveRequest.objects.get(pk=draft["id"])
+        request.status = "submitted"
+        request.submitted_at = timezone.now()
+        request.save(update_fields=["status", "submitted_at"])
+        for order, role in (
+            (1, "advisor"), (2, "program_head"), (3, "final_approver")
+        ):
+            LeaveWorkflowStep.objects.create(
+                leave_request=request, step_order=order, role_type=role,
+                status="pending",
+            )
+
+        # The migrations have no assignee snapshot; creating an assignment
+        # resolves the legacy step so the advisor can act on it.
+        LeaveRoleAssignment.objects.filter(role_type="advisor").update(
+            is_active=False
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        created = self.client.post(
+            "/api/v1/leave-role-assignments/",
+            {
+                "role_type": "advisor",
+                "user": str(self.advisor_user.id),
+                "program": str(self.program.id),
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        step = LeaveWorkflowStep.objects.get(
+            leave_request=request, role_type="advisor"
+        )
+        self.assertEqual(step.assignee_id, self.advisor_user.id)
+
+        # The request is still visible in the student's attendance roster.
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        roster = self.client.get(
+            f"/api/v1/attendance/sessions/{self.session.id}/roster/"
+        )
+        self.assertEqual(roster.status_code, 200, roster.data)
+        self.assertEqual(roster.data["data"][0]["leave_status"], "submitted")
+
+
+class LeaveWorkflowAttendanceTests(LeaveTestBase):
+    """Phase 2 — leave status stays informational for attendance."""
+
+    def test_roster_reflects_workflow_status_without_changing_attendance(self):
+        AttendanceRecord.objects.create(
+            attendance_session=self.session,
+            student=self.student,
+            status="absent",
+            check_in_method="manual",
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        request_id = submitted["id"]
+
+        def roster_status():
+            self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+            row = self.client.get(
+                f"/api/v1/attendance/sessions/{self.session.id}/roster/"
+            ).data["data"][0]
+            return row
+
+        row = roster_status()
+        self.assertEqual(row["checked_in_status"], "absent")
+        self.assertEqual(row["leave_status"], "pending_advisor_review")
+
+        self.assertEqual(self.advisor_opinion(request_id).status_code, 200)
+        self.assertEqual(roster_status()["leave_status"], "pending_program_head_review")
+
+        self.assertEqual(self.program_head_opinion(request_id).status_code, 200)
+        self.assertEqual(roster_status()["leave_status"], "pending_final_approval")
+
+        self.assertEqual(
+            self.final_decision(request_id, "approve", "อนุมัติ").status_code, 200
+        )
+        self.assertEqual(roster_status()["leave_status"], "approved")
+
+        record = AttendanceRecord.objects.get(
+            attendance_session=self.session, student=self.student
+        )
+        self.assertEqual(record.status, "absent")
+
+    def test_returned_and_rejected_requests_are_visible_but_never_present(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        first = self.create_submitted()
+        self.auth_user(self.advisor_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-approvals/{first['id']}/return/",
+                {"comment": "ขอแก้ไข"},
+                format="json",
+            ).status_code,
+            200,
+        )
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        row = self.client.get(
+            f"/api/v1/attendance/sessions/{self.session.id}/roster/"
+        ).data["data"][0]
+        self.assertEqual(row["leave_status"], "returned")
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        second = self.create_submitted()
+        self.advance_to_final_approval(second["id"])
+        self.assertEqual(
+            self.final_decision(second["id"], "reject", "ไม่ครบเงื่อนไข").status_code,
+            200,
+        )
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        row = self.client.get(
+            f"/api/v1/attendance/sessions/{self.session.id}/roster/"
+        ).data["data"][0]
+        # The most recently submitted request is rejected.
+        self.assertEqual(row["leave_status"], "rejected")
+        self.assertEqual(row["leave_request_count"], 2)
+
+    def test_course_review_works_while_request_is_pending(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        response = self.client.post(
+            f"/api/v1/leave-courses/{submitted['courses'][0]['id']}/review/",
+            {"review_status": "acknowledged", "comment": "รับทราบ"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        request = LeaveRequest.objects.get(pk=submitted["id"])
+        # Course review must not advance the approval workflow.
+        self.assertEqual(request.status, "pending_advisor_review")
+
+
+class LeaveWorkflowPrintTests(LeaveTestBase):
+    def test_print_includes_workflow_steps_and_history(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.assertEqual(self.advisor_opinion(submitted["id"]).status_code, 200)
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        printed = self.client.get(f"/api/v1/leave-requests/{submitted['id']}/print/")
+        self.assertEqual(printed.status_code, 200, printed.data)
+        document = printed.data["data"]
+        self.assertEqual(len(document["workflow_steps"]), 3)
+        self.assertEqual(
+            document["workflow_steps"][0]["status_display"], "ดำเนินการแล้ว"
+        )
+        self.assertEqual(
+            document["workflow_steps"][0]["comment"], "เห็นควรอนุญาต"
+        )
+        self.assertEqual(
+            [entry["action"] for entry in document["workflow_history"]],
+            ["submit", "advisor_opinion"],
+        )
+        self.assertEqual(document["status"], "pending_program_head_review")
+

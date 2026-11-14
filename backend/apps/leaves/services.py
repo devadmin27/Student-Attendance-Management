@@ -8,6 +8,7 @@ from datetime import date, time, timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -19,7 +20,48 @@ from apps.leaves.models import (
     LeaveCourse,
     LeaveCourseReview,
     LeaveRequest,
+    LeaveRoleAssignment,
+    LeaveWorkflowHistory,
+    LeaveWorkflowStep,
 )
+
+
+# ---------------------------------------------------------------------------
+# Approval workflow (Phase 2)
+# ---------------------------------------------------------------------------
+#: (step order, role_type, status while that step is waiting)
+WORKFLOW_STEPS = (
+    (1, "advisor", "pending_advisor_review"),
+    (2, "program_head", "pending_program_head_review"),
+    (3, "final_approver", "pending_final_approval"),
+)
+ROLE_LABELS = {
+    "advisor": "อาจารย์ที่ปรึกษา",
+    "program_head": "หัวหน้าหน่วยหลักสูตร",
+    "final_approver": "ผู้มีอำนาจอนุมัติ",
+}
+ROLE_FOR_STATUS = {status: role for _, role, status in WORKFLOW_STEPS}
+STATUS_FOR_ROLE = {role: status for _, role, status in WORKFLOW_STEPS}
+PENDING_STATUSES = frozenset(STATUS_FOR_ROLE.values())
+IN_FLIGHT_STATUSES = PENDING_STATUSES | {"submitted"}
+FINAL_STATUSES = frozenset({"approved", "rejected"})
+#: Requests whose leave status must remain visible in the attendance roster.
+VISIBLE_ATTENDANCE_STATUSES = IN_FLIGHT_STATUSES | FINAL_STATUSES | {"returned"}
+
+#: Available actions exposed to the SPA (backend still re-checks every call).
+ACTION_LABELS = {
+    "submit": "ส่งคำร้อง",
+    "cancel": "ยกเลิกคำร้อง",
+    "resubmit": "ส่งคำร้องอีกครั้ง",
+    "advisor_opinion": "บันทึกความเห็นอาจารย์ที่ปรึกษา",
+    "program_head_opinion": "บันทึกความเห็นหัวหน้าหน่วยหลักสูตร",
+    "final_decision": "บันทึกผลการพิจารณา",
+    "approve": "อนุมัติ",
+    "reject": "ไม่อนุมัติ",
+    "return": "ส่งกลับเพื่อแก้ไข",
+    "admin_override": "ผู้ดูแลระบบดำเนินการแทน",
+    "legacy_import": "นำเข้าสู่ Workflow",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +379,196 @@ def refresh_affected_windows(leave_request: LeaveRequest) -> None:
     )
 
 
-def submit_leave_request(leave_request: LeaveRequest) -> LeaveRequest:
+def _request_term_ids(leave_request: LeaveRequest) -> set:
+    return {
+        term_id
+        for term_id in leave_request.courses.values_list(
+            "course_offering__academic_term_id", flat=True
+        )
+        if term_id is not None
+    }
+
+
+def resolve_assignee(leave_request: LeaveRequest, role_type: str):
+    """Resolve the workflow assignee for one role from LeaveRoleAssignment.
+
+    Specificity order (most specific wins):
+    class group + term > class group > program + term > program > global.
+    Ties are broken by the most recently updated assignment so the result is
+    deterministic even if the college keeps replacement rows around.
+    """
+    student = leave_request.student
+    term_ids = _request_term_ids(leave_request)
+    candidates = []
+    for assignment in LeaveRoleAssignment.objects.filter(
+        role_type=role_type, is_active=True, user__is_active=True
+    ).select_related("user"):
+        if assignment.program_id and assignment.program_id != student.program_id:
+            continue
+        if (
+            assignment.class_group_id
+            and assignment.class_group_id != student.class_group_id
+        ):
+            continue
+        if assignment.academic_term_id and assignment.academic_term_id not in term_ids:
+            continue
+        if (
+            assignment.program_id is None
+            and assignment.class_group_id is None
+            and assignment.academic_term_id is None
+            and role_type != "final_approver"
+        ):
+            # Advisor / program head must be scoped to a programme or group;
+            # only the final approver may be a college-wide assignment.
+            continue
+        candidates.append(assignment)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda row: (
+            1 if row.class_group_id else 0,
+            1 if row.academic_term_id else 0,
+            row.updated_at or timezone.now(),
+        ),
+        reverse=True,
+    )
+    return candidates[0].user
+
+
+def workflow_assignees(leave_request: LeaveRequest) -> dict:
+    """Resolve all three assignees or fail with an actionable message."""
+    assignees = {
+        role: resolve_assignee(leave_request, role)
+        for _, role, _ in WORKFLOW_STEPS
+    }
+    missing = [
+        ROLE_LABELS[role] for role, user in assignees.items() if user is None
+    ]
+    if missing:
+        raise ValidationError(
+            {"workflow": [
+                "ยังไม่ได้มอบหมายผู้รับผิดชอบใน Workflow: "
+                + ", ".join(missing)
+                + " — กรุณาให้ผู้ดูแลระบบกำหนดบทบาทก่อนส่งคำร้อง"
+            ]}
+        )
+    return assignees
+
+
+def ensure_workflow_steps(leave_request: LeaveRequest, assignees: dict) -> None:
+    for order, role, _ in WORKFLOW_STEPS:
+        LeaveWorkflowStep.objects.update_or_create(
+            leave_request=leave_request,
+            step_order=order,
+            defaults={
+                "role_type": role,
+                "assignee": assignees[role],
+                "status": "pending",
+                "acted_by": None,
+                "acted_at": None,
+                "comment": "",
+            },
+        )
+
+
+def _record_history(
+    leave_request: LeaveRequest,
+    action: str,
+    from_status: str,
+    to_status: str,
+    *,
+    actor=None,
+    step_order=None,
+    role_type: str = "",
+    comment: str = "",
+) -> LeaveWorkflowHistory:
+    return LeaveWorkflowHistory.objects.create(
+        leave_request=leave_request,
+        step_order=step_order,
+        role_type=role_type,
+        action=action,
+        from_status=from_status,
+        to_status=to_status,
+        actor=actor,
+        comment=comment,
+    )
+
+
+def current_step(leave_request: LeaveRequest):
+    role_type = ROLE_FOR_STATUS.get(leave_request.status)
+    if role_type is None:
+        return None
+    return leave_request.workflow_steps.filter(role_type=role_type).first()
+
+
+def available_actions(user, leave_request: LeaveRequest) -> list[str]:
+    """Actions the SPA may offer — never a substitute for backend checks."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    if user.role == "student":
+        if leave_request.student.user_id != user.id:
+            return []
+        actions = []
+        if leave_request.is_cancellable:
+            actions.append("cancel")
+        if leave_request.status == "returned":
+            actions.append("resubmit")
+        return actions
+
+    actions = []
+    step = current_step(leave_request)
+    role_type = ROLE_FOR_STATUS.get(leave_request.status)
+    if (
+        step is not None
+        and step.status == "pending"
+        and step.assignee_id == user.id
+        and role_type is not None
+    ):
+        if role_type in ("advisor", "program_head"):
+            actions.extend([f"{role_type}_opinion", "return"])
+        elif role_type == "final_approver":
+            actions.append("final_decision")
+    if user.role == "admin" and leave_request.status in (
+        PENDING_STATUSES | {"returned"}
+    ):
+        actions.append("admin_override")
+    return actions
+
+
+def _lock_request(leave_request: LeaveRequest) -> LeaveRequest:
+    return LeaveRequest.objects.select_for_update().get(pk=leave_request.pk)
+
+
+def _assert_current_step(leave_request: LeaveRequest, role_type: str, actor):
+    expected_status = STATUS_FOR_ROLE[role_type]
+    if leave_request.status != expected_status:
+        raise ValidationError(
+            {"status": ["คำร้องนี้ไม่อยู่ในขั้นตอนที่สามารถดำเนินการได้"]}
+        )
+    step = leave_request.workflow_steps.filter(
+        role_type=role_type, status="pending"
+    ).first()
+    if step is None:
+        raise ValidationError(
+            {"workflow": ["ไม่พบขั้นตอนการพิจารณาที่รอดำเนินการ"]}
+        )
+    if step.assignee_id is None:
+        # Legacy rows created before role assignments existed are resolved
+        # lazily, but only when a configured assignment now matches.
+        resolved = resolve_assignee(leave_request, role_type)
+        if resolved is not None:
+            step.assignee = resolved
+            step.save(update_fields=["assignee", "updated_at"])
+    if step.assignee_id != actor.id:
+        raise PermissionDenied(
+            f"คุณไม่ใช่{ROLE_LABELS[role_type]}ของคำร้องนี้"
+        )
+    return step
+
+
+def submit_leave_request(
+    leave_request: LeaveRequest, actor=None
+) -> LeaveRequest:
     if leave_request.status != "draft":
         raise ValidationError({"status": ["ส่งได้เฉพาะคำร้องที่เป็นแบบร่าง"]})
     if not leave_request.courses.exists():
@@ -352,19 +583,366 @@ def submit_leave_request(leave_request: LeaveRequest) -> LeaveRequest:
     )
     validate_submission_timing(leave_request)
     validate_medical_certificate(leave_request)
-    leave_request.status = "submitted"
-    leave_request.submitted_at = timezone.now()
-    leave_request.save(update_fields=["status", "submitted_at", "updated_at"])
-    return leave_request
+    # Resolve before opening the transaction so a missing assignment returns a
+    # clear 400 rather than a half-created workflow.
+    assignees = workflow_assignees(leave_request)
+
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        if locked.status != "draft":
+            raise ValidationError({"status": ["ส่งได้เฉพาะคำร้องที่เป็นแบบร่าง"]})
+        LeaveWorkflowStep.objects.filter(leave_request=locked).delete()
+        ensure_workflow_steps(locked, assignees)
+        old_status = locked.status
+        locked.status = "pending_advisor_review"
+        locked.submitted_at = timezone.now()
+        locked.save(update_fields=["status", "submitted_at", "updated_at"])
+        _record_history(
+            locked, "submit", old_status, locked.status,
+            actor=actor or locked.student.user,
+        )
+    return locked
 
 
-def cancel_leave_request(leave_request: LeaveRequest) -> LeaveRequest:
+def _record_intermediate_opinion(
+    leave_request: LeaveRequest,
+    actor,
+    role_type: str,
+    comment: str,
+    next_status: str,
+    action: str,
+) -> LeaveRequest:
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValidationError(
+            {"comment": ["กรุณาบันทึกความเห็นก่อนส่งต่อขั้นตอนถัดไป"]}
+        )
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        step = _assert_current_step(locked, role_type, actor)
+        old_status = locked.status
+        now = timezone.now()
+        step.status = "completed"
+        step.acted_by = actor
+        step.acted_at = now
+        step.comment = comment
+        step.save(
+            update_fields=[
+                "status", "acted_by", "acted_at", "comment", "updated_at",
+            ]
+        )
+        locked.status = next_status
+        locked.save(update_fields=["status", "updated_at"])
+        _record_history(
+            locked, action, old_status, next_status,
+            actor=actor, step_order=step.step_order,
+            role_type=role_type, comment=comment,
+        )
+    return locked
+
+
+def record_advisor_opinion(
+    leave_request: LeaveRequest, actor, comment: str
+) -> LeaveRequest:
+    return _record_intermediate_opinion(
+        leave_request, actor, "advisor", comment,
+        "pending_program_head_review", "advisor_opinion",
+    )
+
+
+def record_program_head_opinion(
+    leave_request: LeaveRequest, actor, comment: str
+) -> LeaveRequest:
+    return _record_intermediate_opinion(
+        leave_request, actor, "program_head", comment,
+        "pending_final_approval", "program_head_opinion",
+    )
+
+
+def record_final_decision(
+    leave_request: LeaveRequest,
+    actor,
+    decision: str,
+    comment: str,
+) -> LeaveRequest:
+    decision = (decision or "").strip().lower()
+    if decision not in ("approve", "reject"):
+        raise ValidationError(
+            {"decision": ["ต้องเลือกผลการพิจารณาเป็น approve หรือ reject"]}
+        )
+    comment = (comment or "").strip()
+    if decision == "reject" and not comment:
+        raise ValidationError({"comment": ["กรุณาระบุเหตุผลที่ไม่อนุญาต"]})
+
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        step = _assert_current_step(locked, "final_approver", actor)
+        old_status = locked.status
+        to_status = "approved" if decision == "approve" else "rejected"
+        step.status = "completed"
+        step.acted_by = actor
+        step.acted_at = timezone.now()
+        step.comment = comment
+        step.save(
+            update_fields=[
+                "status", "acted_by", "acted_at", "comment", "updated_at",
+            ]
+        )
+        locked.status = to_status
+        locked.save(update_fields=["status", "updated_at"])
+        _record_history(
+            locked, decision, old_status, to_status,
+            actor=actor, step_order=step.step_order,
+            role_type="final_approver", comment=comment,
+        )
+    return locked
+
+
+def return_for_revision(
+    leave_request: LeaveRequest, actor, comment: str
+) -> LeaveRequest:
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValidationError(
+            {"comment": ["กรุณาระบุเหตุผลที่ส่งกลับเพื่อแก้ไข"]}
+        )
+    if leave_request.status not in PENDING_STATUSES:
+        raise ValidationError(
+            {"status": ["ส่งกลับได้เฉพาะคำร้องที่อยู่ระหว่างการพิจารณา"]}
+        )
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        if locked.status not in PENDING_STATUSES:
+            raise ValidationError(
+                {"status": ["ส่งกลับได้เฉพาะคำร้องที่อยู่ระหว่างการพิจารณา"]}
+            )
+        step = current_step(locked)
+        if step is None or step.status != "pending":
+            raise ValidationError(
+                {"workflow": ["ไม่พบขั้นตอนการพิจารณาที่รอดำเนินการ"]}
+            )
+        if step.role_type == "final_approver":
+            raise ValidationError(
+                {"status": [
+                    "ผู้มีอำนาจอนุมัติต้องบันทึกผลการพิจารณาเป็นอนุญาต "
+                    "หรือไม่อนุญาต โดยระบุเหตุผลประกอบ"
+                ]}
+            )
+        if step.assignee_id != actor.id:
+            raise PermissionDenied(
+                f"คุณไม่ใช่{ROLE_LABELS[step.role_type]}ของคำร้องนี้"
+            )
+        old_status = locked.status
+        step.status = "completed"
+        step.acted_by = actor
+        step.acted_at = timezone.now()
+        step.comment = comment
+        step.save(
+            update_fields=[
+                "status", "acted_by", "acted_at", "comment", "updated_at",
+            ]
+        )
+        locked.status = "returned"
+        locked.save(update_fields=["status", "updated_at"])
+        _record_history(
+            locked, "return", old_status, "returned",
+            actor=actor, step_order=step.step_order,
+            role_type=step.role_type, comment=comment,
+        )
+    return locked
+
+
+def resubmit_leave_request(
+    leave_request: LeaveRequest, actor=None
+) -> LeaveRequest:
+    if leave_request.status != "returned":
+        raise ValidationError(
+            {"status": ["ส่งคำร้องอีกครั้งได้เฉพาะคำร้องที่ถูกส่งกลับเพื่อแก้ไข"]}
+        )
+    if not leave_request.courses.exists():
+        raise ValidationError({"course_offering_ids": ["กรุณาเลือกอย่างน้อย 1 รายวิชา"]})
+    if not (leave_request.reason or "").strip():
+        raise ValidationError({"reason": ["กรุณาระบุเหตุผลการลา"]})
+    validate_leave_range(
+        leave_request.start_date,
+        leave_request.end_date,
+        leave_request.start_time,
+        leave_request.end_time,
+    )
+    # Timing is intentionally not re-checked: the request was already accepted
+    # into the workflow once, and revision must not be blocked by a deadline
+    # that has since passed.
+    validate_medical_certificate(leave_request)
+    assignees = workflow_assignees(leave_request)
+
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        if locked.status != "returned":
+            raise ValidationError(
+                {"status": ["ส่งคำร้องอีกครั้งได้เฉพาะคำร้องที่ถูกส่งกลับเพื่อแก้ไข"]}
+            )
+        old_status = locked.status
+        LeaveWorkflowStep.objects.filter(leave_request=locked).delete()
+        ensure_workflow_steps(locked, assignees)
+        locked.status = "pending_advisor_review"
+        locked.save(update_fields=["status", "updated_at"])
+        _record_history(
+            locked, "resubmit", old_status, locked.status,
+            actor=actor or locked.student.user,
+        )
+    return locked
+
+
+def cancel_leave_request(
+    leave_request: LeaveRequest, actor=None
+) -> LeaveRequest:
     if not leave_request.is_cancellable:
         raise ValidationError({"status": ["คำร้องนี้ไม่สามารถยกเลิกได้"]})
-    leave_request.status = "cancelled"
-    leave_request.cancelled_at = timezone.now()
-    leave_request.save(update_fields=["status", "cancelled_at", "updated_at"])
-    return leave_request
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        if not locked.is_cancellable:
+            raise ValidationError({"status": ["คำร้องนี้ไม่สามารถยกเลิกได้"]})
+        old_status = locked.status
+        step = current_step(locked)
+        pending_steps = list(locked.workflow_steps.filter(status="pending"))
+        now = timezone.now()
+        for pending in pending_steps:
+            pending.status = "skipped"
+            pending.acted_by = actor
+            pending.acted_at = now
+            pending.comment = "ยกเลิกคำร้อง"
+            pending.save(
+                update_fields=[
+                    "status", "acted_by", "acted_at", "comment", "updated_at",
+                ]
+            )
+        locked.status = "cancelled"
+        locked.cancelled_at = timezone.now()
+        locked.save(update_fields=["status", "cancelled_at", "updated_at"])
+        _record_history(
+            locked, "cancel", old_status, locked.status,
+            actor=actor or locked.student.user,
+            step_order=step.step_order if step else None,
+            role_type=step.role_type if step else "",
+            comment="ยกเลิกคำร้อง",
+        )
+    return locked
+
+
+OVERRIDE_TARGET_STATUSES = (
+    PENDING_STATUSES | FINAL_STATUSES | {"returned", "cancelled"}
+)
+
+
+def admin_override(
+    leave_request: LeaveRequest,
+    actor,
+    to_status: str,
+    comment: str,
+) -> LeaveRequest:
+    """Admin exception path (§4.6 rule 4) — always requires a reason."""
+    if getattr(actor, "role", None) != "admin":
+        raise PermissionDenied("เฉพาะผู้ดูแลระบบเท่านั้น")
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValidationError(
+            {"comment": ["กรุณาระบุเหตุผลประกอบการดำเนินการของผู้ดูแลระบบ"]}
+        )
+    if to_status not in OVERRIDE_TARGET_STATUSES:
+        raise ValidationError({"to_status": ["สถานะปลายทางไม่ถูกต้อง"]})
+
+    with transaction.atomic():
+        locked = _lock_request(leave_request)
+        from_status = locked.status
+        if from_status in FINAL_STATUSES or from_status == "cancelled":
+            raise ValidationError(
+                {"status": ["คำร้องที่จบแล้วไม่สามารถดำเนินการแทนได้"]}
+            )
+        now = timezone.now()
+        steps = list(locked.workflow_steps.all())
+
+        if to_status in PENDING_STATUSES:
+            target_order = next(
+                order
+                for order, _role, status in WORKFLOW_STEPS
+                if status == to_status
+            )
+            for step in steps:
+                if step.step_order < target_order:
+                    if step.status == "pending":
+                        step.status = "skipped"
+                        step.acted_by = actor
+                        step.acted_at = now
+                        step.comment = comment
+                        step.save(update_fields=[
+                            "status", "acted_by", "acted_at", "comment",
+                            "updated_at",
+                        ])
+                elif step.step_order == target_order:
+                    step.status = "pending"
+                    step.acted_by = None
+                    step.acted_at = None
+                    step.comment = ""
+                    if step.assignee_id is None:
+                        resolved = resolve_assignee(locked, step.role_type)
+                        if resolved is not None:
+                            step.assignee = resolved
+                    step.save(update_fields=[
+                        "status", "acted_by", "acted_at", "comment",
+                        "assignee", "updated_at",
+                    ])
+                elif step.status != "pending":
+                    step.status = "pending"
+                    step.acted_by = None
+                    step.acted_at = None
+                    step.comment = ""
+                    step.save(update_fields=[
+                        "status", "acted_by", "acted_at", "comment",
+                        "updated_at",
+                    ])
+        else:
+            for step in steps:
+                if step.status == "pending":
+                    step.status = "skipped"
+                    step.acted_by = actor
+                    step.acted_at = now
+                    step.comment = comment
+                    step.save(update_fields=[
+                        "status", "acted_by", "acted_at", "comment",
+                        "updated_at",
+                    ])
+
+        if to_status == "cancelled":
+            locked.cancelled_at = now
+        locked.status = to_status
+        update_fields = ["status", "updated_at"]
+        if to_status == "cancelled":
+            update_fields.append("cancelled_at")
+        locked.save(update_fields=update_fields)
+        _record_history(
+            locked, "admin_override", from_status, to_status,
+            actor=actor, comment=comment,
+        )
+    return locked
+
+
+def backfill_pending_step_assignees(role_type: str) -> int:
+    """Assign unresolved in-flight steps after a role assignment is added."""
+    updated = 0
+    steps = (
+        LeaveWorkflowStep.objects.filter(
+            role_type=role_type, status="pending", assignee__isnull=True
+        )
+        .select_related("leave_request__student")
+    )
+    for step in steps:
+        resolved = resolve_assignee(step.leave_request, role_type)
+        if resolved is not None:
+            step.assignee = resolved
+            step.save(update_fields=["assignee", "updated_at"])
+            updated += 1
+    return updated
+
 
 
 # ---------------------------------------------------------------------------
@@ -381,9 +959,9 @@ def create_leave_attachment(
     The serializer validates extension/size; this service adds the business
     rules (draft-only, attachment count cap) and records metadata.
     """
-    if leave_request.status != "draft":
+    if not leave_request.is_editable:
         raise ValidationError(
-            {"status": ["แนบไฟล์ได้เฉพาะคำร้องที่เป็นแบบร่าง"]}
+            {"status": ["แนบไฟล์ได้เฉพาะคำร้องที่เป็นแบบร่างหรือถูกส่งกลับเพื่อแก้ไข"]}
         )
     if (
         leave_request.attachments.count()
@@ -410,9 +988,9 @@ def delete_leave_attachment(
     leave_request: LeaveRequest,
     attachment: LeaveAttachment,
 ) -> None:
-    if leave_request.status != "draft":
+    if not leave_request.is_editable:
         raise ValidationError(
-            {"status": ["ลบไฟล์แนบได้เฉพาะคำร้องที่เป็นแบบร่าง"]}
+            {"status": ["ลบไฟล์แนบได้เฉพาะคำร้องที่เป็นแบบร่างหรือถูกส่งกลับเพื่อแก้ไข"]}
         )
     attachment.file.delete(save=False)
     attachment.delete()
@@ -436,7 +1014,7 @@ def review_course(
         raise PermissionDenied("คุณไม่มีสิทธิ์พิจารณารายวิชานี้")
 
     request = leave_course.leave_request
-    if request.status != "submitted":
+    if request.status in ("draft", "cancelled"):
         raise ValidationError(
             {"status": ["พิจารณาได้เฉพาะคำร้องที่ส่งแล้วและยังไม่ถูกยกเลิก"]}
         )
@@ -466,9 +1044,10 @@ def review_course(
 def leave_status_map_for_session(session: AttendanceSession) -> dict[str, dict]:
     """Map student_id → displayed leave information for one attendance session.
 
-    Only submitted requests count as a visible leave status. Multiple
-    overlapping requests are collapsed to the most recently submitted one and
-    counted, so the roster can show "has leave" without duplicating rows.
+    Submitted, in-flight, and decided requests all count as a visible leave
+    status (never draft/cancelled). Multiple overlapping requests are collapsed
+    to the most recently submitted one and counted, so the roster can show
+    "has leave" without duplicating rows.
     """
     student_ids = list(
         session.course_offering.enrollments.filter(
@@ -483,7 +1062,7 @@ def leave_status_map_for_session(session: AttendanceSession) -> dict[str, dict]:
         LeaveCourse.objects.filter(
             course_offering_id=session.course_offering_id,
             leave_request__student_id__in=student_ids,
-            leave_request__status="submitted",
+            leave_request__status__in=VISIBLE_ATTENDANCE_STATUSES,
             leave_request__start_date__lte=session.session_date,
             leave_request__end_date__gte=session.session_date,
         )

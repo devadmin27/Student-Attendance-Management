@@ -5,6 +5,9 @@ import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import LeaveAttachmentList from "@/components/LeaveAttachments";
+import LeaveWorkflowSection, {
+  hasWorkflowAction,
+} from "@/components/LeaveWorkflow";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
@@ -150,6 +153,33 @@ function StudentLeaveDetailContent() {
     }
   };
 
+  const resubmit = async () => {
+    if (!request) return;
+    const confirmed = await confirmDialog({
+      title: "ยืนยันการส่งคำร้องอีกครั้ง",
+      text: "คำร้องจะเริ่มการพิจารณาใหม่ตั้งแต่ขั้นที่ 1 (อาจารย์ที่ปรึกษา)",
+      confirmText: "ส่งอีกครั้ง",
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      const { data, envelope } = await samsRequest<LeaveRequest>({
+        url: `/leave-requests/${request.id}/resubmit/`,
+        method: "POST",
+        data: {},
+      });
+      setRequest(data);
+      await toastSuccess(envelope.message);
+    } catch (error) {
+      await alertError(
+        "ส่งคำร้องอีกครั้งไม่สำเร็จ",
+        error instanceof ApiError ? error.message : undefined,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cancel = async () => {
     if (!request) return;
     const confirmed = await confirmDialog({
@@ -243,22 +273,32 @@ function StudentLeaveDetailContent() {
               พิมพ์ใบลา
             </Link>
             {request.is_editable && (
-              <>
-                <Link
-                  href={`/student/leaves/${request.id}/edit`}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  แก้ไข
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => void submit()}
-                  disabled={busy}
-                  className="rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
-                >
-                  ส่งคำร้อง
-                </button>
-              </>
+              <Link
+                href={`/student/leaves/${request.id}/edit`}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                แก้ไข
+              </Link>
+            )}
+            {request.status === "draft" && (
+              <button
+                type="button"
+                onClick={() => void submit()}
+                disabled={busy}
+                className="rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
+              >
+                ส่งคำร้อง
+              </button>
+            )}
+            {hasWorkflowAction(request.available_actions, "resubmit") && (
+              <button
+                type="button"
+                onClick={() => void resubmit()}
+                disabled={busy}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                ส่งคำร้องอีกครั้ง
+              </button>
             )}
             {request.is_cancellable && (
               <button
@@ -360,6 +400,12 @@ function StudentLeaveDetailContent() {
               </p>
             )}
         </div>
+
+        <LeaveWorkflowSection
+          steps={request.workflow_steps}
+          history={request.workflow_history}
+          currentRoleType={request.current_step?.role_type ?? null}
+        />
 
         <div>
           <h2 className="mb-2 text-sm font-semibold text-slate-800">

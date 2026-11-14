@@ -17,6 +17,12 @@ const inputClass =
 const STATUS_OPTIONS: { value: LeaveRequestStatus; label: string }[] = [
   { value: "draft", label: "แบบร่าง" },
   { value: "submitted", label: "ส่งคำร้องแล้ว" },
+  { value: "pending_advisor_review", label: "รออาจารย์ที่ปรึกษา" },
+  { value: "pending_program_head_review", label: "รอหัวหน้าหน่วยหลักสูตร" },
+  { value: "pending_final_approval", label: "รอผู้มีอำนาจอนุมัติ" },
+  { value: "approved", label: "อนุมัติแล้ว" },
+  { value: "rejected", label: "ไม่อนุมัติ" },
+  { value: "returned", label: "ส่งกลับเพื่อแก้ไข" },
   { value: "cancelled", label: "ยกเลิกคำร้อง" },
 ];
 

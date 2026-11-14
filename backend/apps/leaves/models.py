@@ -130,11 +130,18 @@ class LeaveRequest(models.Model):
 
     @property
     def is_editable(self) -> bool:
-        return self.status == "draft"
+        return self.status in ("draft", "returned")
 
     @property
     def is_cancellable(self) -> bool:
-        return self.status in ("draft", "submitted")
+        return self.status in (
+            "draft",
+            "submitted",
+            "pending_advisor_review",
+            "pending_program_head_review",
+            "pending_final_approval",
+            "returned",
+        )
 
     def __str__(self):
         return f"{self.student.student_code} {self.start_date}–{self.end_date} ({self.status})"
@@ -314,3 +321,100 @@ class LeaveRoleAssignment(models.Model):
 
     def __str__(self):
         return f"{self.get_role_type_display()} — {self.user}"
+
+
+class LeaveWorkflowStep(models.Model):
+    """One approval step of a submitted leave request.
+
+    Steps are created when a draft is submitted so the request always has a
+    concrete assignee snapshot. Re-assigning a role later never rewrites the
+    steps of requests that are already in flight.
+    """
+
+    STATUS_CHOICES = (
+        ("pending", "รอดำเนินการ"),
+        ("completed", "ดำเนินการแล้ว"),
+        ("skipped", "ข้ามขั้นตอน"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    leave_request = models.ForeignKey(
+        LeaveRequest, on_delete=models.CASCADE, related_name="workflow_steps",
+        verbose_name="คำร้องลา",
+    )
+    step_order = models.PositiveSmallIntegerField("ลำดับขั้นตอน")
+    role_type = models.CharField(
+        "บทบาทใน Workflow", max_length=24,
+        choices=LeaveRoleAssignment.ROLE_CHOICES,
+    )
+    assignee = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="leave_workflow_steps", verbose_name="ผู้รับผิดชอบ",
+    )
+    status = models.CharField(
+        "สถานะขั้นตอน", max_length=16, choices=STATUS_CHOICES, default="pending"
+    )
+    acted_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="leave_workflow_actions", verbose_name="ผู้ดำเนินการ",
+    )
+    acted_at = models.DateTimeField("ดำเนินการเมื่อ", null=True, blank=True)
+    comment = models.TextField("ความเห็น/เหตุผล", blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "leave_workflow_steps"
+        ordering = ["step_order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["leave_request", "step_order"],
+                name="uniq_leave_workflow_step_order",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["role_type", "status"]),
+            models.Index(fields=["assignee", "status"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.leave_request_id} #{self.step_order} "
+            f"{self.role_type} ({self.status})"
+        )
+
+
+class LeaveWorkflowHistory(models.Model):
+    """Append-only business history shown to students and approvers.
+
+    This is deliberately separate from `audit.AuditLog`: the audit log is the
+    security trail (IP/user agent, admin-only), while this table is the
+    workflow timeline that the student is allowed to read.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    leave_request = models.ForeignKey(
+        LeaveRequest, on_delete=models.CASCADE, related_name="workflow_history",
+        verbose_name="คำร้องลา",
+    )
+    step_order = models.PositiveSmallIntegerField("ลำดับขั้นตอน", null=True, blank=True)
+    role_type = models.CharField("บทบาทใน Workflow", max_length=24, blank=True, default="")
+    action = models.CharField("การดำเนินการ", max_length=32)
+    from_status = models.CharField("สถานะก่อนดำเนินการ", max_length=32, blank=True, default="")
+    to_status = models.CharField("สถานะหลังดำเนินการ", max_length=32, blank=True, default="")
+    actor = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="leave_workflow_history", verbose_name="ผู้ดำเนินการ",
+    )
+    comment = models.TextField("ความเห็น/เหตุผล", blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "leave_workflow_history"
+        ordering = ["created_at", "step_order"]
+        indexes = [
+            models.Index(fields=["leave_request", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.leave_request_id} {self.action}"

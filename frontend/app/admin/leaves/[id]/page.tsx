@@ -5,6 +5,9 @@ import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import LeaveAttachmentList from "@/components/LeaveAttachments";
+import LeaveWorkflowSection, {
+  hasWorkflowAction,
+} from "@/components/LeaveWorkflow";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
@@ -156,6 +159,14 @@ function AdminLeaveDetailContent() {
             >
               พิมพ์ใบลา
             </Link>
+            {hasWorkflowAction(request.available_actions, "admin_override") && (
+              <Link
+                href={`/approvals/${request.id}`}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100"
+              >
+                ดำเนินการแทน
+              </Link>
+            )}
           </div>
           <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
             <div>
@@ -193,9 +204,16 @@ function AdminLeaveDetailContent() {
             </div>
           </dl>
           <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว ไม่สามารถแก้ไขหรือพิจารณาคำร้องแทนอาจารย์รายวิชาได้
+            ผู้ดูแลระบบดูข้อมูลได้อย่างเดียว — หากจำเป็นต้องดำเนินการแทนผู้รับผิดชอบ
+            ให้ใช้ปุ่ม “ดำเนินการแทน” ซึ่งต้องระบุเหตุผลและจะถูกบันทึกใน Audit Log
           </p>
         </div>
+
+        <LeaveWorkflowSection
+          steps={request.workflow_steps}
+          history={request.workflow_history}
+          currentRoleType={request.current_step?.role_type ?? null}
+        />
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap items-center gap-2">

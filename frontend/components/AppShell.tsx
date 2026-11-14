@@ -24,6 +24,8 @@ const ADMIN_MENU: MenuItem[] = [
   { href: "/admin/attendance-sessions", label: "คาบเรียนเช็คชื่อ", icon: "🟢" },
   { href: "/admin/attendance-records", label: "รายการเช็คชื่อ", icon: "✅" },
   { href: "/admin/leaves", label: "คำร้องลานักศึกษา", icon: "📝" },
+  { href: "/admin/leave-roles", label: "ผู้รับผิดชอบ Workflow ใบลา", icon: "🧩" },
+  { href: "/approvals", label: "คิวพิจารณาใบลา", icon: "🗳️" },
   { href: "/admin/reports", label: "รายงานการเข้าเรียน", icon: "📈" },
   { href: "/admin/audit-logs", label: "Audit Logs", icon: "📝" },
 ];
@@ -32,6 +34,7 @@ const INSTRUCTOR_MENU: MenuItem[] = [
   { href: "/instructor/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/instructor/attendance", label: "เปิดเช็คชื่อ", icon: "🟢" },
   { href: "/instructor/leaves", label: "คำร้องลาในรายวิชา", icon: "📝" },
+  { href: "/approvals", label: "คิวพิจารณาใบลา", icon: "🗳️" },
   { href: "/instructor/course-offerings", label: "จัดการเปิดสอนรายวิชา", icon: "📚" },
   { href: "/instructor/enrollments", label: "จัดการการลงทะเบียน", icon: "🗒️" },
   { href: "/instructor/schedules", label: "จัดการตารางเรียน", icon: "⏰" },
