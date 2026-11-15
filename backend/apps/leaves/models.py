@@ -323,6 +323,53 @@ class LeaveRoleAssignment(models.Model):
         return f"{self.get_role_type_display()} — {self.user}"
 
 
+class LeaveWorkflowConfig(models.Model):
+    """Configurable approval step order, resolved by scope.
+
+    `steps` is an ordered JSON list of role types drawn from
+    `LeaveRoleAssignment.ROLE_CHOICES`. The service/serializer layer enforces
+    that the order follows advisor -> program_head -> final_approver, contains
+    no duplicates, and always ends with `final_approver`.
+
+    When no active row matches a request, the default three-step workflow is
+    used, so existing installations keep working after the migration.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(
+        "ชื่อชุดขั้นตอน", max_length=120, blank=True, default=""
+    )
+    program = models.ForeignKey(
+        "academics.Program", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="leave_workflow_configs", verbose_name="หลักสูตร",
+    )
+    class_group = models.ForeignKey(
+        "academics.ClassGroup", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="leave_workflow_configs", verbose_name="กลุ่มเรียน",
+    )
+    academic_term = models.ForeignKey(
+        "academics.AcademicTerm", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="leave_workflow_configs", verbose_name="ภาคการศึกษา",
+    )
+    steps = models.JSONField("ลำดับขั้นตอน", default=list)
+    is_active = models.BooleanField("เปิดใช้งาน", default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "leave_workflow_configs"
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["is_active"]),
+        ]
+
+    def __str__(self):
+        if self.name:
+            return self.name
+        scope = self.program.program_name if self.program_id else "ทั้งระบบ"
+        return f"Workflow {scope} ({len(self.steps or [])} ขั้น)"
+
+
 class LeaveWorkflowStep(models.Model):
     """One approval step of a submitted leave request.
 

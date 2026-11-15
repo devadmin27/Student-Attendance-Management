@@ -486,7 +486,15 @@ function LeavePrintContent() {
         </section>
 
         {document.workflow_steps.length > 0 && (
-          <section className="leave-print-avoid-break mt-6 grid grid-cols-3 gap-4 text-center text-xs">
+          <section
+            className={`leave-print-avoid-break mt-6 grid gap-4 text-center text-xs ${
+              document.workflow_steps.length >= 3
+                ? "grid-cols-3"
+                : document.workflow_steps.length === 2
+                  ? "grid-cols-2"
+                  : "grid-cols-1"
+            }`}
+          >
             {document.workflow_steps.map((step) => (
               <div key={step.id}>
                 <p>ลงชื่อ ...........................................</p>

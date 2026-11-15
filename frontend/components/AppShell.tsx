@@ -25,6 +25,7 @@ const ADMIN_MENU: MenuItem[] = [
   { href: "/admin/attendance-records", label: "รายการเช็คชื่อ", icon: "✅" },
   { href: "/admin/leaves", label: "คำร้องลานักศึกษา", icon: "📝" },
   { href: "/admin/leave-roles", label: "ผู้รับผิดชอบ Workflow ใบลา", icon: "🧩" },
+  { href: "/admin/leave-workflow", label: "ตั้งค่าลำดับ Workflow ใบลา", icon: "🛠️" },
   { href: "/approvals", label: "คิวพิจารณาใบลา", icon: "🗳️" },
   { href: "/admin/reports", label: "รายงานการเข้าเรียน", icon: "📈" },
   { href: "/admin/audit-logs", label: "Audit Logs", icon: "📝" },

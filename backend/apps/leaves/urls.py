@@ -12,6 +12,11 @@ router.register(
     views.LeaveRoleAssignmentViewSet,
     basename="leave-role-assignment",
 )
+router.register(
+    "leave-workflow-configs",
+    views.LeaveWorkflowConfigViewSet,
+    basename="leave-workflow-config",
+)
 
 urlpatterns = [
     # Policy + private attachment download are explicit routes (the latter is

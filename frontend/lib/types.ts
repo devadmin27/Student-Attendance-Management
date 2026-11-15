@@ -347,6 +347,23 @@ export interface LeaveRoleAssignment {
   updated_at: string;
 }
 
+export interface LeaveWorkflowConfig {
+  id: string;
+  name: string;
+  program: string | null;
+  program_name: string | null;
+  class_group: string | null;
+  class_group_name: string | null;
+  academic_term: string | null;
+  term_label: string;
+  steps: LeaveWorkflowRoleType[];
+  steps_display: string;
+  step_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LeaveRequest {
   id: string;
   student: string;

@@ -7,6 +7,7 @@ from apps.leaves.models import (
     LeaveCourseReview,
     LeaveRequest,
     LeaveRoleAssignment,
+    LeaveWorkflowConfig,
     LeaveWorkflowHistory,
     LeaveWorkflowStep,
 )
@@ -59,6 +60,13 @@ class LeaveCourseReviewAdmin(admin.ModelAdmin):
 class LeaveRoleAssignmentAdmin(admin.ModelAdmin):
     list_display = ["user", "role_type", "program", "class_group", "is_active"]
     list_filter = ["role_type", "is_active"]
+
+
+@admin.register(LeaveWorkflowConfig)
+class LeaveWorkflowConfigAdmin(admin.ModelAdmin):
+    list_display = ["name", "program", "class_group", "academic_term", "steps", "is_active"]
+    list_filter = ["is_active", "program", "academic_term"]
+    search_fields = ["name", "program__program_name", "class_group__group_name"]
 
 
 @admin.register(LeaveWorkflowStep)

@@ -20,6 +20,7 @@ from apps.leaves.models import (
     LeaveCourse,
     LeaveRequest,
     LeaveRoleAssignment,
+    LeaveWorkflowConfig,
 )
 from apps.leaves.serializers import (
     LeaveAdminOverrideWriteSerializer,
@@ -34,6 +35,7 @@ from apps.leaves.serializers import (
     LeaveRequestWriteSerializer,
     LeaveReturnWriteSerializer,
     LeaveRoleAssignmentSerializer,
+    LeaveWorkflowConfigSerializer,
 )
 from common.permissions import IsAdmin, RoleRequired
 from common.responses import error_response, success_response
@@ -514,8 +516,11 @@ class LeaveApprovalViewSet(viewsets.GenericViewSet):
         )
         user = self.request.user
         if user.role != "admin":
+            # All steps are stored as "pending" when a request enters the
+            # workflow; the role that matches the request's current status is
+            # the one actually awaiting action.
             condition = Q()
-            for _order, role_type, step_status in services.WORKFLOW_STEPS:
+            for role_type, step_status in services.STATUS_FOR_ROLE.items():
                 condition |= Q(
                     status=step_status,
                     workflow_steps__role_type=role_type,
@@ -677,6 +682,71 @@ class LeaveRoleAssignmentViewSet(viewsets.ModelViewSet):
             self.request.user, "leave_role_assignment_delete",
             "leave_role_assignment", instance.pk,
             metadata={"role_type": instance.role_type},
+            request=self.request,
+        )
+        instance.delete()
+
+
+class LeaveWorkflowConfigViewSet(viewsets.ModelViewSet):
+    """Admin-only configurable approval order (2–3 steps).
+
+    The most specific active scope wins at submission time:
+    class group + term > class group > programme + term > programme > global.
+    With no active row the default three-step workflow is used.
+    """
+
+    queryset = LeaveWorkflowConfig.objects.select_related(
+        "program", "class_group", "academic_term"
+    )
+    serializer_class = LeaveWorkflowConfigSerializer
+    permission_classes = [IsAdmin]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = {
+        "program": ["exact"],
+        "class_group": ["exact"],
+        "academic_term": ["exact"],
+        "is_active": ["exact"],
+    }
+    search_fields = [
+        "name", "program__program_code", "program__program_name",
+        "class_group__group_code", "class_group__group_name",
+    ]
+    ordering_fields = ["created_at", "updated_at", "name"]
+    ordering = ["-updated_at"]
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        log_audit(
+            self.request.user, "leave_workflow_config_create",
+            "leave_workflow_config", instance.pk,
+            metadata={
+                "steps": instance.steps,
+                "program": str(instance.program_id) if instance.program_id else None,
+                "class_group": (
+                    str(instance.class_group_id) if instance.class_group_id else None
+                ),
+                "academic_term": (
+                    str(instance.academic_term_id)
+                    if instance.academic_term_id else None
+                ),
+            },
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        log_audit(
+            self.request.user, "leave_workflow_config_update",
+            "leave_workflow_config", instance.pk,
+            metadata={"steps": instance.steps, "is_active": instance.is_active},
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        log_audit(
+            self.request.user, "leave_workflow_config_delete",
+            "leave_workflow_config", instance.pk,
+            metadata={"steps": instance.steps},
             request=self.request,
         )
         instance.delete()

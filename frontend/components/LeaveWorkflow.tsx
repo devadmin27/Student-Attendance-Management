@@ -45,7 +45,7 @@ export function LeaveWorkflowSteps({
   if (steps.length === 0) {
     return (
       <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-        ยังไม่มีขั้นตอนการพิจารณา — ระบบจะสร้างขั้นตอนทั้ง 3 เมื่อนักศึกษาส่งคำร้อง
+        ยังไม่มีขั้นตอนการพิจารณา — ระบบจะสร้างขั้นตอนตามที่ผู้ดูแลระบบกำหนดเมื่อนักศึกษาส่งคำร้อง
       </p>
     );
   }

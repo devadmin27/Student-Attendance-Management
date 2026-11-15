@@ -21,27 +21,42 @@ from apps.leaves.models import (
     LeaveCourseReview,
     LeaveRequest,
     LeaveRoleAssignment,
+    LeaveWorkflowConfig,
     LeaveWorkflowHistory,
     LeaveWorkflowStep,
 )
 
 
 # ---------------------------------------------------------------------------
-# Approval workflow (Phase 2)
+# Approval workflow (Phase 2, configurable step order)
 # ---------------------------------------------------------------------------
-#: (step order, role_type, status while that step is waiting)
-WORKFLOW_STEPS = (
-    (1, "advisor", "pending_advisor_review"),
-    (2, "program_head", "pending_program_head_review"),
-    (3, "final_approver", "pending_final_approval"),
+#: Canonical role order. Any configured workflow is an ordered subset of this.
+WORKFLOW_ROLE_ORDER = ("advisor", "program_head", "final_approver")
+#: Used when no active LeaveWorkflowConfig matches the request.
+DEFAULT_WORKFLOW_ROLES = WORKFLOW_ROLE_ORDER
+#: (step order, role_type, status while that step is waiting) — default only.
+WORKFLOW_STEPS = tuple(
+    (order, role, status)
+    for order, (role, status) in enumerate(
+        (
+            ("advisor", "pending_advisor_review"),
+            ("program_head", "pending_program_head_review"),
+            ("final_approver", "pending_final_approval"),
+        ),
+        start=1,
+    )
 )
 ROLE_LABELS = {
     "advisor": "อาจารย์ที่ปรึกษา",
     "program_head": "หัวหน้าหน่วยหลักสูตร",
     "final_approver": "ผู้มีอำนาจอนุมัติ",
 }
-ROLE_FOR_STATUS = {status: role for _, role, status in WORKFLOW_STEPS}
-STATUS_FOR_ROLE = {role: status for _, role, status in WORKFLOW_STEPS}
+STATUS_FOR_ROLE = {
+    "advisor": "pending_advisor_review",
+    "program_head": "pending_program_head_review",
+    "final_approver": "pending_final_approval",
+}
+ROLE_FOR_STATUS = {status: role for role, status in STATUS_FOR_ROLE.items()}
 PENDING_STATUSES = frozenset(STATUS_FOR_ROLE.values())
 IN_FLIGHT_STATUSES = PENDING_STATUSES | {"submitted"}
 FINAL_STATUSES = frozenset({"approved", "rejected"})
@@ -389,6 +404,88 @@ def _request_term_ids(leave_request: LeaveRequest) -> set:
     }
 
 
+def normalize_workflow_steps(steps) -> tuple[str, ...]:
+    """Validate and canonicalise a configured step list.
+
+    Rules: at least one step; every value is a known role; no duplicates; the
+    order follows advisor -> program_head -> final_approver; the last step is
+    always the final approver.
+    """
+    if not isinstance(steps, (list, tuple)):
+        raise ValidationError({"steps": ["ลำดับขั้นตอนต้องเป็นรายการบทบาท"]})
+    cleaned: list[str] = []
+    for value in steps:
+        role = str(value or "").strip()
+        if role not in WORKFLOW_ROLE_ORDER:
+            raise ValidationError(
+                {"steps": [f"บทบาทใน Workflow ไม่ถูกต้อง: {value}"]}
+            )
+        if role in cleaned:
+            raise ValidationError({"steps": ["ห้ามใช้บทบาทซ้ำใน Workflow"]})
+        cleaned.append(role)
+    if not cleaned:
+        raise ValidationError({"steps": ["ต้องมีขั้นตอนอย่างน้อย 1 ขั้น"]})
+    if cleaned[-1] != "final_approver":
+        raise ValidationError(
+            {"steps": ["ขั้นตอนสุดท้ายต้องเป็นผู้มีอำนาจอนุมัติ"]}
+        )
+    canonical = [role for role in WORKFLOW_ROLE_ORDER if role in cleaned]
+    if cleaned != canonical:
+        raise ValidationError(
+            {"steps": ["ลำดับขั้นตอนต้องเรียง advisor → program_head → final_approver"]}
+        )
+    return tuple(cleaned)
+
+
+def _workflow_scope_rank(config: LeaveWorkflowConfig) -> int:
+    """Most specific scope wins: group+term > group > program+term > program > global."""
+    if config.class_group_id and config.academic_term_id:
+        return 4
+    if config.class_group_id:
+        return 3
+    if config.program_id and config.academic_term_id:
+        return 2
+    if config.program_id:
+        return 1
+    return 0
+
+
+def resolve_workflow_roles(leave_request: LeaveRequest) -> tuple[str, ...]:
+    """Pick the ordered roles for this request from LeaveWorkflowConfig.
+
+    Falls back to the default three-step workflow when no active configuration
+    matches. Malformed configuration is ignored in favour of the default so a
+    bad admin row can never block students from submitting.
+    """
+    student = leave_request.student
+    term_ids = _request_term_ids(leave_request)
+    candidates = []
+    for config in LeaveWorkflowConfig.objects.filter(is_active=True):
+        if config.program_id and config.program_id != student.program_id:
+            continue
+        if (
+            config.class_group_id
+            and config.class_group_id != student.class_group_id
+        ):
+            continue
+        if config.academic_term_id and config.academic_term_id not in term_ids:
+            continue
+        candidates.append(config)
+    if not candidates:
+        return DEFAULT_WORKFLOW_ROLES
+    candidates.sort(
+        key=lambda row: (
+            _workflow_scope_rank(row),
+            row.updated_at or timezone.now(),
+        ),
+        reverse=True,
+    )
+    try:
+        return normalize_workflow_steps(candidates[0].steps)
+    except ValidationError:
+        return DEFAULT_WORKFLOW_ROLES
+
+
 def resolve_assignee(leave_request: LeaveRequest, role_type: str):
     """Resolve the workflow assignee for one role from LeaveRoleAssignment.
 
@@ -435,11 +532,14 @@ def resolve_assignee(leave_request: LeaveRequest, role_type: str):
     return candidates[0].user
 
 
-def workflow_assignees(leave_request: LeaveRequest) -> dict:
-    """Resolve all three assignees or fail with an actionable message."""
+def workflow_assignees(
+    leave_request: LeaveRequest, roles=None
+) -> dict:
+    """Resolve every configured role, or fail with an actionable message."""
+    roles = tuple(roles or resolve_workflow_roles(leave_request))
     assignees = {
         role: resolve_assignee(leave_request, role)
-        for _, role, _ in WORKFLOW_STEPS
+        for role in roles
     }
     missing = [
         ROLE_LABELS[role] for role, user in assignees.items() if user is None
@@ -455,8 +555,11 @@ def workflow_assignees(leave_request: LeaveRequest) -> dict:
     return assignees
 
 
-def ensure_workflow_steps(leave_request: LeaveRequest, assignees: dict) -> None:
-    for order, role, _ in WORKFLOW_STEPS:
+def ensure_workflow_steps(
+    leave_request: LeaveRequest, assignees: dict, roles=None
+) -> None:
+    roles = tuple(roles or assignees.keys())
+    for order, role in enumerate(roles, start=1):
         LeaveWorkflowStep.objects.update_or_create(
             leave_request=leave_request,
             step_order=order,
@@ -495,10 +598,12 @@ def _record_history(
 
 
 def current_step(leave_request: LeaveRequest):
-    role_type = ROLE_FOR_STATUS.get(leave_request.status)
-    if role_type is None:
-        return None
-    return leave_request.workflow_steps.filter(role_type=role_type).first()
+    """The single step currently waiting for an action (if any)."""
+    return (
+        leave_request.workflow_steps.filter(status="pending")
+        .order_by("step_order")
+        .first()
+    )
 
 
 def available_actions(user, leave_request: LeaveRequest) -> list[str]:
@@ -517,16 +622,15 @@ def available_actions(user, leave_request: LeaveRequest) -> list[str]:
 
     actions = []
     step = current_step(leave_request)
-    role_type = ROLE_FOR_STATUS.get(leave_request.status)
     if (
         step is not None
         and step.status == "pending"
         and step.assignee_id == user.id
-        and role_type is not None
+        and leave_request.status in PENDING_STATUSES
     ):
-        if role_type in ("advisor", "program_head"):
-            actions.extend([f"{role_type}_opinion", "return"])
-        elif role_type == "final_approver":
+        if step.role_type in ("advisor", "program_head"):
+            actions.extend([f"{step.role_type}_opinion", "return"])
+        elif step.role_type == "final_approver":
             actions.append("final_decision")
     if user.role == "admin" and leave_request.status in (
         PENDING_STATUSES | {"returned"}
@@ -585,16 +689,17 @@ def submit_leave_request(
     validate_medical_certificate(leave_request)
     # Resolve before opening the transaction so a missing assignment returns a
     # clear 400 rather than a half-created workflow.
-    assignees = workflow_assignees(leave_request)
+    roles = resolve_workflow_roles(leave_request)
+    assignees = workflow_assignees(leave_request, roles)
 
     with transaction.atomic():
         locked = _lock_request(leave_request)
         if locked.status != "draft":
             raise ValidationError({"status": ["ส่งได้เฉพาะคำร้องที่เป็นแบบร่าง"]})
         LeaveWorkflowStep.objects.filter(leave_request=locked).delete()
-        ensure_workflow_steps(locked, assignees)
+        ensure_workflow_steps(locked, assignees, roles)
         old_status = locked.status
-        locked.status = "pending_advisor_review"
+        locked.status = STATUS_FOR_ROLE[roles[0]]
         locked.submitted_at = timezone.now()
         locked.save(update_fields=["status", "submitted_at", "updated_at"])
         _record_history(
@@ -609,7 +714,6 @@ def _record_intermediate_opinion(
     actor,
     role_type: str,
     comment: str,
-    next_status: str,
     action: str,
 ) -> LeaveRequest:
     comment = (comment or "").strip()
@@ -620,6 +724,16 @@ def _record_intermediate_opinion(
     with transaction.atomic():
         locked = _lock_request(leave_request)
         step = _assert_current_step(locked, role_type, actor)
+        next_step = (
+            locked.workflow_steps.filter(step_order__gt=step.step_order)
+            .order_by("step_order")
+            .first()
+        )
+        if next_step is None:
+            raise ValidationError(
+                {"workflow": ["ไม่พบขั้นตอนถัดไปใน Workflow ของคำร้องนี้"]}
+            )
+        next_status = STATUS_FOR_ROLE[next_step.role_type]
         old_status = locked.status
         now = timezone.now()
         step.status = "completed"
@@ -645,8 +759,7 @@ def record_advisor_opinion(
     leave_request: LeaveRequest, actor, comment: str
 ) -> LeaveRequest:
     return _record_intermediate_opinion(
-        leave_request, actor, "advisor", comment,
-        "pending_program_head_review", "advisor_opinion",
+        leave_request, actor, "advisor", comment, "advisor_opinion",
     )
 
 
@@ -654,8 +767,7 @@ def record_program_head_opinion(
     leave_request: LeaveRequest, actor, comment: str
 ) -> LeaveRequest:
     return _record_intermediate_opinion(
-        leave_request, actor, "program_head", comment,
-        "pending_final_approval", "program_head_opinion",
+        leave_request, actor, "program_head", comment, "program_head_opinion",
     )
 
 
@@ -693,7 +805,7 @@ def record_final_decision(
         _record_history(
             locked, decision, old_status, to_status,
             actor=actor, step_order=step.step_order,
-            role_type="final_approver", comment=comment,
+            role_type=step.role_type, comment=comment,
         )
     return locked
 
@@ -773,7 +885,8 @@ def resubmit_leave_request(
     # into the workflow once, and revision must not be blocked by a deadline
     # that has since passed.
     validate_medical_certificate(leave_request)
-    assignees = workflow_assignees(leave_request)
+    roles = resolve_workflow_roles(leave_request)
+    assignees = workflow_assignees(leave_request, roles)
 
     with transaction.atomic():
         locked = _lock_request(leave_request)
@@ -783,8 +896,8 @@ def resubmit_leave_request(
             )
         old_status = locked.status
         LeaveWorkflowStep.objects.filter(leave_request=locked).delete()
-        ensure_workflow_steps(locked, assignees)
-        locked.status = "pending_advisor_review"
+        ensure_workflow_steps(locked, assignees, roles)
+        locked.status = STATUS_FOR_ROLE[roles[0]]
         locked.save(update_fields=["status", "updated_at"])
         _record_history(
             locked, "resubmit", old_status, locked.status,
@@ -859,14 +972,17 @@ def admin_override(
                 {"status": ["คำร้องที่จบแล้วไม่สามารถดำเนินการแทนได้"]}
             )
         now = timezone.now()
-        steps = list(locked.workflow_steps.all())
+        steps = list(locked.workflow_steps.order_by("step_order"))
+        steps_by_role = {step.role_type: step for step in steps}
 
         if to_status in PENDING_STATUSES:
-            target_order = next(
-                order
-                for order, _role, status in WORKFLOW_STEPS
-                if status == to_status
-            )
+            target_role = ROLE_FOR_STATUS[to_status]
+            target_step = steps_by_role.get(target_role)
+            if target_step is None:
+                raise ValidationError(
+                    {"to_status": ["Workflow ของคำร้องนี้ไม่มีขั้นตอนที่เลือก"]}
+                )
+            target_order = target_step.step_order
             for step in steps:
                 if step.step_order < target_order:
                     if step.status == "pending":

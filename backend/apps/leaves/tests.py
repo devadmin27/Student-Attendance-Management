@@ -20,6 +20,7 @@ from apps.leaves.models import (
     LeaveCourseReview,
     LeaveRequest,
     LeaveRoleAssignment,
+    LeaveWorkflowConfig,
     LeaveWorkflowHistory,
     LeaveWorkflowStep,
 )
@@ -1711,4 +1712,252 @@ class LeaveWorkflowPrintTests(LeaveTestBase):
             ["submit", "advisor_opinion"],
         )
         self.assertEqual(document["status"], "pending_program_head_review")
+
+
+class LeaveWorkflowConfigTests(LeaveTestBase):
+    """Configurable approval order (2–3 steps, scoped like role assignments)."""
+
+    def make_config(self, steps, **overrides):
+        return LeaveWorkflowConfig.objects.create(
+            name=overrides.pop("name", "ชุดทดสอบ"),
+            steps=list(steps),
+            is_active=overrides.pop("is_active", True),
+            **overrides,
+        )
+
+    def test_two_step_config_advisor_then_final_approver(self):
+        self.make_config(["advisor", "final_approver"], program=self.program)
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+
+        self.assertEqual(submitted["status"], "pending_advisor_review")
+        self.assertEqual(
+            [step["role_type"] for step in submitted["workflow_steps"]],
+            ["advisor", "final_approver"],
+        )
+        self.assertEqual(len(submitted["workflow_steps"]), 2)
+
+        advisor = self.advisor_opinion(submitted["id"])
+        self.assertEqual(advisor.status_code, 200, advisor.data)
+        self.assertEqual(
+            advisor.data["data"]["status"], "pending_final_approval"
+        )
+
+        # The programme head is not part of this workflow at all.
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-approvals/").data["data"], []
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/leave-approvals/{submitted['id']}/program-head-opinion/",
+                {"comment": "ไม่เกี่ยวกับขั้นนี้"},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        final = self.final_decision(submitted["id"], "approve", "อนุมัติ")
+        self.assertEqual(final.status_code, 200, final.data)
+        body = final.data["data"]
+        self.assertEqual(body["status"], "approved")
+        self.assertEqual(
+            [entry["action"] for entry in body["workflow_history"]],
+            ["submit", "advisor_opinion", "approve"],
+        )
+
+    def test_scope_specificity_prefers_group_then_program_then_global(self):
+        # All three scopes are active; the most specific one must win.
+        self.make_config(["advisor", "program_head", "final_approver"])
+        self.make_config(
+            ["program_head", "final_approver"], program=self.program
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        program_scoped = self.create_submitted()
+        self.assertEqual(
+            [step["role_type"] for step in program_scoped["workflow_steps"]],
+            ["program_head", "final_approver"],
+        )
+        self.assertEqual(program_scoped["status"], "pending_program_head_review")
+
+        self.make_config(
+            ["advisor", "final_approver"],
+            program=self.program,
+            class_group=self.group,
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        group_scoped = self.create_submitted()
+        self.assertEqual(
+            [step["role_type"] for step in group_scoped["workflow_steps"]],
+            ["advisor", "final_approver"],
+        )
+
+    def test_term_scoped_config_beats_program_scope(self):
+        self.make_config(["advisor", "final_approver"], program=self.program)
+        self.make_config(
+            ["program_head", "final_approver"],
+            program=self.program,
+            academic_term=self.term,
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.assertEqual(
+            [step["role_type"] for step in submitted["workflow_steps"]],
+            ["program_head", "final_approver"],
+        )
+        self.assertEqual(submitted["status"], "pending_program_head_review")
+
+    def test_missing_assignee_for_configured_role_blocks_submit(self):
+        self.make_config(["advisor", "final_approver"], program=self.program)
+        LeaveRoleAssignment.objects.filter(role_type="final_approver").update(
+            is_active=False
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        draft = self.create_draft()
+        response = self.client.post(
+            f"/api/v1/leave-requests/{draft.data['data']['id']}/submit/", {}
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("workflow", response.data["errors"])
+
+    def test_admin_override_only_targets_configured_steps(self):
+        self.make_config(["advisor", "final_approver"], program=self.program)
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        impossible = self.client.post(
+            f"/api/v1/leave-requests/{submitted['id']}/admin-override/",
+            {
+                "to_status": "pending_program_head_review",
+                "comment": "พยายามข้ามไปขั้นที่ไม่มีใน Workflow",
+            },
+            format="json",
+        )
+        self.assertEqual(impossible.status_code, 400, impossible.data)
+        self.assertIn("to_status", impossible.data["errors"])
+
+        jumped = self.client.post(
+            f"/api/v1/leave-requests/{submitted['id']}/admin-override/",
+            {
+                "to_status": "pending_final_approval",
+                "comment": "ผู้ดูแลระบบส่งต่อให้ผู้อนุมัติแทน",
+            },
+            format="json",
+        )
+        self.assertEqual(jumped.status_code, 200, jumped.data)
+        body = jumped.data["data"]
+        self.assertEqual(body["status"], "pending_final_approval")
+        self.assertEqual(
+            [step["status"] for step in body["workflow_steps"]],
+            ["skipped", "pending"],
+        )
+
+        approved = self.final_decision(submitted["id"], "approve", "อนุมัติ")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(approved.data["data"]["status"], "approved")
+
+    def test_resubmit_restarts_configured_first_step(self):
+        self.make_config(["program_head", "final_approver"], program=self.program)
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.assertEqual(submitted["status"], "pending_program_head_review")
+
+        self.auth_user(self.head_user, "Str0ngTeach!Pass")
+        returned = self.client.post(
+            f"/api/v1/leave-approvals/{submitted['id']}/return/",
+            {"comment": "ขอให้แก้ไขรายละเอียด"},
+            format="json",
+        )
+        self.assertEqual(returned.status_code, 200, returned.data)
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        resubmitted = self.client.post(
+            f"/api/v1/leave-requests/{submitted['id']}/resubmit/", {}
+        )
+        self.assertEqual(resubmitted.status_code, 200, resubmitted.data)
+        body = resubmitted.data["data"]
+        self.assertEqual(body["status"], "pending_program_head_review")
+        self.assertEqual(
+            [step["role_type"] for step in body["workflow_steps"]],
+            ["program_head", "final_approver"],
+        )
+        self.assertEqual(
+            [step["status"] for step in body["workflow_steps"]],
+            ["pending", "pending"],
+        )
+
+    def test_config_change_does_not_rewrite_in_flight_steps(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        self.assertEqual(len(submitted["workflow_steps"]), 3)
+
+        self.make_config(["advisor", "final_approver"], program=self.program)
+
+        detail = self.client.get(
+            f"/api/v1/leave-requests/{submitted['id']}/"
+        )
+        self.assertEqual(detail.status_code, 200, detail.data)
+        self.assertEqual(
+            [step["role_type"] for step in detail.data["data"]["workflow_steps"]],
+            ["advisor", "program_head", "final_approver"],
+        )
+
+    def test_config_validation_rules(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+
+        def post(steps, **extra):
+            return self.client.post(
+                "/api/v1/leave-workflow-configs/",
+                {"steps": steps, **extra},
+                format="json",
+            )
+
+        wrong_order = post(["advisor", "final_approver", "program_head"])
+        self.assertEqual(wrong_order.status_code, 400, wrong_order.data)
+        self.assertIn("steps", wrong_order.data["errors"])
+
+        no_final = post(["advisor", "program_head"])
+        self.assertEqual(no_final.status_code, 400, no_final.data)
+        self.assertIn("steps", no_final.data["errors"])
+
+        duplicate = post(["advisor", "advisor", "final_approver"])
+        self.assertEqual(duplicate.status_code, 400, duplicate.data)
+        self.assertIn("steps", duplicate.data["errors"])
+
+        empty = post([])
+        self.assertEqual(empty.status_code, 400, empty.data)
+        self.assertIn("steps", empty.data["errors"])
+
+        valid = post(
+            ["advisor", "final_approver"], program=str(self.program.id)
+        )
+        self.assertEqual(valid.status_code, 201, valid.data)
+        self.assertEqual(valid.data["steps"], ["advisor", "final_approver"])
+
+        duplicate_scope = post(["final_approver"], program=str(self.program.id))
+        self.assertEqual(duplicate_scope.status_code, 400, duplicate_scope.data)
+        self.assertIn("steps", duplicate_scope.data["errors"])
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="leave_workflow_config_create"
+            ).exists()
+        )
+
+    def test_only_admin_manages_workflow_configs(self):
+        for user, password in (
+            (self.student_user, "Str0ngStud!Pass"),
+            (self.instructor_user, "Str0ngTeach!Pass"),
+            (self.head_user, "Str0ngTeach!Pass"),
+        ):
+            self.auth_user(user, password)
+            self.assertEqual(
+                self.client.get("/api/v1/leave-workflow-configs/").status_code,
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        self.assertEqual(
+            self.client.get("/api/v1/leave-workflow-configs/").status_code, 200
+        )
 

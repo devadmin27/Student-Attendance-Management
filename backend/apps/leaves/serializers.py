@@ -14,6 +14,7 @@ from apps.leaves.models import (
     LeaveCourseReview,
     LeaveRequest,
     LeaveRoleAssignment,
+    LeaveWorkflowConfig,
     LeaveWorkflowHistory,
     LeaveWorkflowStep,
 )
@@ -308,11 +309,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         return grace.isoformat() if grace else None
 
     def get_current_step(self, obj):
-        role_type = services.ROLE_FOR_STATUS.get(obj.status)
-        if role_type is None:
-            return None
+        # Workflow order is request-specific, so the pending step itself is the
+        # source of truth (ordered by step_order via the model Meta).
         for step in obj.workflow_steps.all():
-            if step.role_type == role_type:
+            if step.status == "pending":
                 return LeaveWorkflowStepSerializer(step).data
         return None
 
@@ -752,6 +752,86 @@ class LeaveRoleAssignmentSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"role_type": [
                         "มีการมอบหมายบทบาทนี้ในขอบเขตเดียวกันอยู่แล้ว "
+                        "— กรุณาปิดใช้งานรายการเดิมก่อน"
+                    ]}
+                )
+        return attrs
+
+
+class LeaveWorkflowConfigSerializer(serializers.ModelSerializer):
+    program_name = serializers.CharField(
+        source="program.program_name", read_only=True, default=None
+    )
+    class_group_name = serializers.CharField(
+        source="class_group.group_name", read_only=True, default=None
+    )
+    term_label = serializers.SerializerMethodField()
+    steps_display = serializers.SerializerMethodField()
+    step_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeaveWorkflowConfig
+        fields = [
+            "id", "name",
+            "program", "program_name",
+            "class_group", "class_group_name",
+            "academic_term", "term_label",
+            "steps", "steps_display", "step_count",
+            "is_active", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_term_label(self, obj):
+        if obj.academic_term_id is None:
+            return "ทุกภาคเรียน"
+        term = obj.academic_term
+        return f"{term.academic_year}/{term.get_semester_display()}"
+
+    def get_steps_display(self, obj):
+        labels = dict(LeaveRoleAssignment.ROLE_CHOICES)
+        try:
+            roles = services.normalize_workflow_steps(obj.steps)
+        except Exception:
+            roles = tuple(obj.steps or ())
+        return " → ".join(labels.get(str(role), str(role)) for role in roles)
+
+    def get_step_count(self, obj):
+        return len(obj.steps or [])
+
+    def validate(self, attrs):
+        instance = self.instance
+        steps = attrs.get("steps", getattr(instance, "steps", None))
+        program = attrs.get("program", getattr(instance, "program", None))
+        class_group = attrs.get(
+            "class_group", getattr(instance, "class_group", None)
+        )
+        academic_term = attrs.get(
+            "academic_term", getattr(instance, "academic_term", None)
+        )
+        is_active = attrs.get("is_active", getattr(instance, "is_active", True))
+
+        normalized = services.normalize_workflow_steps(steps)
+        attrs["steps"] = list(normalized)
+
+        if class_group is not None and program is not None:
+            if class_group.program_id != program.id:
+                raise serializers.ValidationError(
+                    {"class_group": ["กลุ่มเรียนไม่ได้อยู่ในหลักสูตรที่เลือก"]}
+                )
+
+        if is_active:
+            duplicates = LeaveWorkflowConfig.objects.filter(
+                is_active=True,
+                program=program,
+                class_group=class_group,
+                academic_term=academic_term,
+            )
+            if instance is not None:
+                duplicates = duplicates.exclude(pk=instance.pk)
+            if duplicates.exists():
+                raise serializers.ValidationError(
+                    {"steps": [
+                        "มีชุดขั้นตอนที่เปิดใช้งานในขอบเขตเดียวกันอยู่แล้ว "
                         "— กรุณาปิดใช้งานรายการเดิมก่อน"
                     ]}
                 )

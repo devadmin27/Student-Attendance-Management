@@ -19,22 +19,57 @@ import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { formatThaiDate, formatThaiDateTime } from "@/lib/format";
 import { alertError, confirmDialog, toastSuccess } from "@/lib/swal";
-import type { LeaveCourse, LeaveRequest, LeaveRequestStatus } from "@/lib/types";
+import type {
+  LeaveCourse,
+  LeaveRequest,
+  LeaveRequestStatus,
+  LeaveWorkflowRoleType,
+} from "@/lib/types";
 
 const inputClass =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
-const OVERRIDE_TARGET_OPTIONS: {
-  value: Exclude<LeaveRequestStatus, "draft" | "submitted">;
+type OverrideTargetStatus = Exclude<LeaveRequestStatus, "draft" | "submitted">;
+
+/** Pending statuses are role-based; only roles present in this request apply. */
+const PENDING_STATUS_BY_ROLE: Record<
+  LeaveWorkflowRoleType,
+  { value: OverrideTargetStatus; label: string }
+> = {
+  advisor: {
+    value: "pending_advisor_review",
+    label: "ส่งกลับไปขั้นอาจารย์ที่ปรึกษา",
+  },
+  program_head: {
+    value: "pending_program_head_review",
+    label: "ส่งไปขั้นหัวหน้าหน่วยหลักสูตร",
+  },
+  final_approver: {
+    value: "pending_final_approval",
+    label: "ส่งไปขั้นผู้มีอำนาจอนุมัติ",
+  },
+};
+
+const ROLE_LABELS: Record<LeaveWorkflowRoleType, string> = {
+  advisor: "อาจารย์ที่ปรึกษา",
+  program_head: "หัวหน้าหน่วยหลักสูตร",
+  final_approver: "ผู้มีอำนาจอนุมัติ",
+};
+
+const FINAL_OVERRIDE_TARGET_OPTIONS: {
+  value: OverrideTargetStatus;
   label: string;
 }[] = [
-  { value: "pending_advisor_review", label: "ส่งกลับไปขั้นอาจารย์ที่ปรึกษา" },
-  { value: "pending_program_head_review", label: "ส่งไปขั้นหัวหน้าหน่วยหลักสูตร" },
-  { value: "pending_final_approval", label: "ส่งไปขั้นผู้มีอำนาจอนุมัติ" },
   { value: "approved", label: "อนุมัติ (approved)" },
   { value: "rejected", label: "ไม่อนุมัติ (rejected)" },
   { value: "returned", label: "ส่งกลับเพื่อแก้ไข (returned)" },
   { value: "cancelled", label: "ยกเลิกคำร้อง (cancelled)" },
+];
+
+const DEFAULT_WORKFLOW_ROLES: LeaveWorkflowRoleType[] = [
+  "advisor",
+  "program_head",
+  "final_approver",
 ];
 
 function timeRange(start: string | null, end: string | null): string {
@@ -278,6 +313,29 @@ function ApprovalDetailContent() {
   );
   const hasActions = canOpinion || canFinal || canReturn || canOverride;
 
+  const workflowRoles: LeaveWorkflowRoleType[] =
+    request.workflow_steps.length > 0
+      ? request.workflow_steps.map((step) => step.role_type)
+      : DEFAULT_WORKFLOW_ROLES;
+  const overrideTargetOptions: {
+    value: OverrideTargetStatus;
+    label: string;
+  }[] = [
+    ...workflowRoles.map((role) => PENDING_STATUS_BY_ROLE[role]),
+    ...FINAL_OVERRIDE_TARGET_OPTIONS,
+  ];
+  const currentRole = request.current_step?.role_type ?? null;
+  const currentIndex = request.current_step
+    ? request.workflow_steps.findIndex(
+        (step) => step.id === request.current_step?.id,
+      )
+    : -1;
+  const nextRole =
+    currentIndex >= 0
+      ? request.workflow_steps[currentIndex + 1]?.role_type ?? null
+      : null;
+  const nextRoleLabel = nextRole ? ROLE_LABELS[nextRole] : null;
+
   return (
     <AppShell title="พิจารณาคำร้องลา">
       {!user && null}
@@ -400,9 +458,9 @@ function ApprovalDetailContent() {
           {canOpinion && (
             <div className="mt-4 space-y-3">
               <p className="text-xs text-slate-500">
-                {request.current_step?.role_type === "advisor"
-                  ? "บันทึกความเห็นในฐานะอาจารย์ที่ปรึกษา แล้วส่งต่อให้หัวหน้าหน่วยหลักสูตร"
-                  : "บันทึกความเห็นในฐานะหัวหน้าหน่วยหลักสูตร แล้วส่งต่อให้ผู้มีอำนาจอนุมัติ"}
+                {`บันทึกความเห็นในฐานะ${
+                  currentRole ? ROLE_LABELS[currentRole] : "ผู้พิจารณา"
+                } แล้วส่งต่อให้${nextRoleLabel ?? "ขั้นถัดไป"}`}
               </p>
               <textarea
                 rows={3}
@@ -437,7 +495,7 @@ function ApprovalDetailContent() {
           {canFinal && (
             <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
               <p className="text-xs text-slate-500">
-                พิจารณาคำร้องพร้อมความเห็นจากอาจารย์ที่ปรึกษาและหัวหน้าหน่วยหลักสูตร
+                พิจารณาคำร้องพร้อมความเห็นจากขั้นตอนก่อนหน้าใน Workflow
               </p>
               <div className="flex flex-wrap gap-4 text-sm text-slate-700">
                 <label className="flex items-center gap-2">
@@ -515,7 +573,7 @@ function ApprovalDetailContent() {
                     onChange={(e) => setOverrideStatus(e.target.value)}
                     className={inputClass}
                   >
-                    {OVERRIDE_TARGET_OPTIONS.filter(
+                    {overrideTargetOptions.filter(
                       (option) => option.value !== request.status,
                     ).map((option) => (
                       <option key={option.value} value={option.value}>
