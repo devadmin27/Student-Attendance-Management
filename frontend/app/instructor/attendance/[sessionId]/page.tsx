@@ -660,6 +660,42 @@ function SessionControlContent() {
                     label: "เวลาที่เช็คชื่อ",
                     render: (r) => (r.checked_in_at ? new Date(r.checked_in_at).toLocaleTimeString("th-TH") : "-"),
                   },
+                  {
+                    // Display-only: leave status is shown alongside attendance
+                    // and never changes checked_in_status automatically.
+                    key: "leave_status",
+                    label: "สถานะใบลา",
+                    render: (r) =>
+                      r.leave_status ? (
+                        <div className="flex flex-col items-start gap-1">
+                          {r.leave_course_id ? (
+                            <Link
+                              href={`/instructor/leaves/${r.leave_course_id}`}
+                              title="เปิดหน้าพิจารณาคำร้องลารายวิชา"
+                              className="hover:underline"
+                            >
+                              <StatusBadge
+                                status={r.leave_status}
+                                display={r.leave_type_display ?? r.leave_status_display ?? "มีใบลา"}
+                              />
+                            </Link>
+                          ) : (
+                            <StatusBadge
+                              status={r.leave_status}
+                              display={r.leave_type_display ?? r.leave_status_display ?? "มีใบลา"}
+                            />
+                          )}
+                          {r.leave_request_count !== null &&
+                            r.leave_request_count > 1 && (
+                              <span className="text-[11px] text-slate-500">
+                                มี {r.leave_request_count} คำร้องซ้อน
+                              </span>
+                            )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      ),
+                  },
                 ]}
                 rows={filteredRoster}
                 loading={loading}

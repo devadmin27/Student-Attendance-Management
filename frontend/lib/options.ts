@@ -18,13 +18,14 @@ async function fetchAllPages(
   labelKeys: string[],
   valueKey = "id",
   filterRow?: (row: Record<string, unknown>) => boolean,
+  params: Record<string, string | number> = {},
 ): Promise<Option[]> {
   const out: Option[] = [];
   let page = 1;
   for (;;) {
     const { data, envelope } = await samsRequest<MetaOptionData>({
       url: basePath,
-      params: { page, page_size: 100 },
+      params: { ...params, page, page_size: 100 },
     });
     const rows = data.results ?? (Array.isArray(data) ? (data as unknown as Record<string, unknown>[]) : []);
     for (const row of rows) {
@@ -54,6 +55,7 @@ export type OptionsKey =
   | "course-offerings-active" // เฉพาะ offering ที่ยังไม่จบภาคเรียน/ยกเลิก
   | "instructors"
   | "students"
+  | "users" // อาจารย์และผู้ดูแลระบบ (สำหรับผู้รับผิดชอบ Workflow)
   | "enrollments"
   | "schedules";
 
@@ -83,7 +85,36 @@ export async function loadOptions(key: OptionsKey): Promise<Option[]> {
       return fetchAllPages("/instructors/", ["employee_code", "first_name", "last_name"]);
     case "students":
       return fetchAllPages("/students/", ["student_code", "first_name", "last_name"]);
+    case "users":
+      return loadUserOptions();
     default:
       return [];
   }
+}
+
+/**
+ * Option loader for approval workflow assignees (Phase 2).
+ * The endpoint is admin-only; advisors/heads must be instructors while the
+ * final approver may also be an admin account.
+ */
+export async function loadUserOptions(
+  roles: Array<"instructor" | "admin"> = ["instructor", "admin"],
+): Promise<Option[]> {
+  const groups = await Promise.all(
+    roles.map((role) =>
+      fetchAllPages("/users/", ["display_name", "username"], "id", undefined, {
+        role,
+        is_active: "true",
+      }),
+    ),
+  );
+  const seen = new Set<string>();
+  return groups
+    .flat()
+    .filter((option) => {
+      if (seen.has(option.value)) return false;
+      seen.add(option.value);
+      return true;
+    })
+    .sort((a, b) => a.label.localeCompare(b.label, "th"));
 }

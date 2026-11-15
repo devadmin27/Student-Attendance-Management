@@ -17,14 +17,25 @@ class UserSerializer(serializers.ModelSerializer):
     student_code = serializers.CharField(
         source="student_profile.student_code", read_only=True, default=None
     )
+    display_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
-            "id", "username", "email", "role", "is_active",
+            "id", "username", "email", "role", "is_active", "display_name",
             "date_joined", "created_at", "updated_at", "student_code",
         ]
         read_only_fields = ["id", "date_joined", "created_at", "updated_at"]
+
+    def get_display_name(self, obj):
+        profile = getattr(obj, "instructor_profile", None) or getattr(
+            obj, "student_profile", None
+        )
+        if profile is not None:
+            name = f"{profile.first_name} {profile.last_name}".strip()
+            if name:
+                return name
+        return obj.get_full_name() or obj.username
 
     def validate_role(self, value):
         request = self.context.get("request")
@@ -206,6 +217,11 @@ class SAMSLoginSerializer(TokenObtainPairSerializer):
                 "student_code": student.student_code,
                 "first_name": student.first_name,
                 "last_name": student.last_name,
+                "program_name": student.program.program_name if student.program_id else None,
+                "class_group_name": (
+                    student.class_group.group_name if student.class_group_id else None
+                ),
+                "academic_year_level": student.academic_year_level,
             }
         elif instructor is not None:
             profile = {
@@ -250,7 +266,12 @@ class MeSerializer(serializers.ModelSerializer):
                 "first_name": student.first_name,
                 "last_name": student.last_name,
                 "program_id": str(student.program_id) if student.program_id else None,
+                "program_name": student.program.program_name if student.program_id else None,
                 "class_group_id": str(student.class_group_id) if student.class_group_id else None,
+                "class_group_name": (
+                    student.class_group.group_name if student.class_group_id else None
+                ),
+                "academic_year_level": student.academic_year_level,
             }
         if instructor is not None:
             return {

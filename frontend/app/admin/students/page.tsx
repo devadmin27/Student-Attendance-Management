@@ -99,8 +99,8 @@ export default function AdminStudentsPage() {
   useEffect(() => {
     if (!importOpen || optionsLoaded) return;
     let cancelled = false;
-    setOptionsLoading(true);
     (async () => {
+      setOptionsLoading(true);
       try {
         const [programOptions, groupOptions] = await Promise.all([
           loadOptions("programs"),
