@@ -10,6 +10,7 @@ const DEGREE_OPTIONS = [
   { value: "bachelor", label: "ปริญญาตรี" },
   { value: "master", label: "ปริญญาโท" },
   { value: "doctoral", label: "ปริญญาเอก" },
+  { value: "higher_diploma", label: "ประกาศนียบัตรวิชาชีพชั้นสูง" },
 ];
 
 const fields: FieldDef[] = [

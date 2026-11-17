@@ -2114,11 +2114,13 @@ paths:
           enum:
           - bachelor
           - doctoral
+          - higher_diploma
           - master
         description: |-
           * `bachelor` - ปริญญาตรี
           * `master` - ปริญญาโท
           * `doctoral` - ปริญญาเอก
+          * `higher_diploma` - ประกาศนียบัตรวิชาชีพชั้นสูง
       - in: query
         name: is_active
         schema:
@@ -3726,11 +3728,13 @@ components:
       - bachelor
       - master
       - doctoral
+      - higher_diploma
       type: string
       description: |-
         * `bachelor` - ปริญญาตรี
         * `master` - ปริญญาโท
         * `doctoral` - ปริญญาเอก
+        * `higher_diploma` - ประกาศนียบัตรวิชาชีพชั้นสูง
     Enrollment:
       type: object
       properties:

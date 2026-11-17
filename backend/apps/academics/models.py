@@ -11,10 +11,22 @@ class Program(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     program_code = models.CharField("รหัสหลักสูตร", max_length=32, unique=True)
     program_name = models.CharField("ชื่อหลักสูตร", max_length=200)
+    DEGREE_BACHELOR = "bachelor"
+    DEGREE_MASTER = "master"
+    DEGREE_DOCTORAL = "doctoral"
+    DEGREE_HIGHER_DIPLOMA = "higher_diploma"
+
+    DEGREE_CHOICES = [
+        (DEGREE_BACHELOR, "ปริญญาตรี"),
+        (DEGREE_MASTER, "ปริญญาโท"),
+        (DEGREE_DOCTORAL, "ปริญญาเอก"),
+        (DEGREE_HIGHER_DIPLOMA, "ประกาศนียบัตรวิชาชีพชั้นสูง"),
+    ]
+
     degree_level = models.CharField(
         "ระดับการศึกษา", max_length=50,
-        choices=[("bachelor", "ปริญญาตรี"), ("master", "ปริญญาโท"), ("doctoral", "ปริญญาเอก")],
-        default="bachelor",
+        choices=DEGREE_CHOICES,
+        default=DEGREE_BACHELOR,
     )
     is_active = models.BooleanField("เปิดใช้งาน", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
