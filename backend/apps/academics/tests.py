@@ -50,3 +50,33 @@ class OptionReadRBACTests(BaseSamsTest):
         self.client.force_authenticate(self.admin_user)
         rows_all = self.client.get("/api/v1/students/?page_size=100").json()["data"]
         self.assertIn("640009", [r["student_code"] for r in rows_all])  # admin ยังเห็นครบ
+
+
+class ProgramDegreeLevelTests(BaseSamsTest):
+    def auth_admin(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+
+    def test_admin_can_create_higher_diploma_program(self):
+        self.auth_admin()
+        response = self.client.post(
+            "/api/v1/programs/",
+            {
+                "program_code": "DIP-HV",
+                "program_name": "ประกาศนียบัตรวิชาชีพชั้นสูง",
+                "degree_level": "higher_diploma",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.json()["data"]["degree_level"], "higher_diploma")
+
+    def test_unknown_degree_level_is_rejected(self):
+        self.auth_admin()
+        response = self.client.post(
+            "/api/v1/programs/",
+            {
+                "program_code": "DIP-BAD",
+                "program_name": "ระดับไม่รู้จัก",
+                "degree_level": "not_a_level",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

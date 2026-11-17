@@ -52,7 +52,7 @@ export interface Program {
   id: string;
   program_code: string;
   program_name: string;
-  degree_level: "bachelor" | "master" | "doctoral";
+  degree_level: "bachelor" | "master" | "doctoral" | "higher_diploma";
   is_active: boolean;
 }
 
