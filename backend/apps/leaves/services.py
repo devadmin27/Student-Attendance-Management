@@ -13,6 +13,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import StudentProfile
+from apps.academics.models import AcademicTerm
 from apps.attendance.models import AttendanceSession
 from apps.courses.models import Enrollment
 from apps.leaves.models import (
@@ -97,6 +98,105 @@ def leave_policy() -> dict:
         ),
         "server_date": timezone.localdate().isoformat(),
     }
+
+
+#: Fixed rows of the printed "ประวัติการลา" table (paper form has no "other").
+HISTORY_LEAVE_TYPES = ("sick", "personal")
+HISTORY_LABELS = {
+    "sick": "ลาป่วย (วัน)",
+    "personal": "ลากิจ (วัน)",
+}
+
+
+def _academic_year_for(day: date) -> int:
+    """Academic year (พ.ศ.) covering `day`, from real terms when available."""
+    term = (
+        AcademicTerm.objects.filter(start_date__lte=day, end_date__gte=day)
+        .order_by("-start_date", "-academic_year")
+        .first()
+    )
+    if term is not None:
+        return term.academic_year
+    # No term covers this date — fall back to the usual Thai-year convention.
+    return day.year + 543
+
+
+def _academic_year_range(year: int) -> tuple[date, date]:
+    """Date span of an academic year, from its stored terms when available."""
+    spans = list(
+        AcademicTerm.objects.filter(academic_year=year).values_list(
+            "start_date", "end_date"
+        )
+    )
+    if spans:
+        return (
+            min(start for start, _ in spans),
+            max(end for _, end in spans),
+        )
+    gregorian_year = year - 543
+    return date(gregorian_year, 1, 1), date(gregorian_year, 12, 31)
+
+
+def _inclusive_days(start: date | None, end: date | None) -> int:
+    if not start or not end or end < start:
+        return 0
+    return (end - start).days + 1
+
+
+def leave_history_summary(
+    student: StudentProfile,
+    reference_date: date | None,
+    *,
+    current: LeaveRequest | None = None,
+    exclude_id=None,
+    draft: dict | None = None,
+) -> list[dict]:
+    """Rows for the "ประวัติการลา" table.
+
+    `ลามาแล้ว` counts only approved requests of the same student/type within
+    the academic year of `reference_date`, excluding the current request.
+    `ลาครั้งนี้` comes from `current` (detail/print) or `draft` (live form
+    preview) and is 0 for leave types outside the two paper-form rows.
+    """
+    reference = reference_date or timezone.localdate()
+    year_start, year_end = _academic_year_range(_academic_year_for(reference))
+
+    previous_days = {leave_type: 0 for leave_type in HISTORY_LEAVE_TYPES}
+    approved = LeaveRequest.objects.filter(
+        student=student,
+        status="approved",
+        leave_type__in=HISTORY_LEAVE_TYPES,
+        start_date__gte=year_start,
+        start_date__lte=year_end,
+    )
+    if current is not None:
+        approved = approved.exclude(pk=current.pk)
+    elif exclude_id is not None:
+        approved = approved.exclude(pk=exclude_id)
+    for leave_type, start, end in approved.values_list(
+        "leave_type", "start_date", "end_date"
+    ):
+        previous_days[leave_type] += _inclusive_days(start, end)
+
+    if current is not None:
+        current_type = current.leave_type
+        current_days = current.total_days
+    else:
+        draft = draft or {}
+        current_type = draft.get("leave_type", "")
+        current_days = _inclusive_days(
+            draft.get("start_date"), draft.get("end_date")
+        )
+
+    return [
+        {
+            "leave_type": leave_type,
+            "label": HISTORY_LABELS[leave_type],
+            "previous_days": previous_days[leave_type],
+            "current_days": current_days if current_type == leave_type else 0,
+        }
+        for leave_type in HISTORY_LEAVE_TYPES
+    ]
 
 
 def submission_deadlines(

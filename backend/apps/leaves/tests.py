@@ -10,7 +10,7 @@ from rest_framework import status
 
 from apps.accounts.models import User
 from apps.accounts.tests import BaseSamsTest
-from apps.academics.models import Program
+from apps.academics.models import AcademicTerm, Program
 from apps.attendance.models import AttendanceRecord, AttendanceSession
 from apps.audit.models import AuditLog
 from apps.courses.models import Course, CourseOffering, Enrollment
@@ -1960,4 +1960,193 @@ class LeaveWorkflowConfigTests(LeaveTestBase):
         self.assertEqual(
             self.client.get("/api/v1/leave-workflow-configs/").status_code, 200
         )
+
+
+class LeaveHistoryTests(LeaveTestBase):
+    """ประวัติการลา table: approved-only, same academic year, current, other."""
+
+    def make_leave(self, leave_type, start, end, status="approved", student=None):
+        return LeaveRequest.objects.create(
+            student=student or self.student,
+            leave_type=leave_type,
+            start_date=start,
+            end_date=end,
+            reason="ทดสอบประวัติการลา",
+            status=status,
+        )
+
+    def rows_by_type(self, payload):
+        return {row["leave_type"]: row for row in payload["leave_history"]}
+
+    def rows_from_list(self, data):
+        return {row["leave_type"]: row for row in data}
+
+    def test_detail_counts_only_approved_and_excludes_current(self):
+        today = timezone.localdate()
+        self.make_leave("sick", today + timedelta(days=1), today + timedelta(days=2))
+        self.make_leave("personal", today + timedelta(days=3), today + timedelta(days=5))
+        # rejected / draft must never count
+        self.make_leave(
+            "sick", today + timedelta(days=10), today + timedelta(days=20),
+            status="rejected",
+        )
+        self.make_leave(
+            "personal", today + timedelta(days=11), today + timedelta(days=14),
+            status="draft",
+        )
+        current = self.make_leave(
+            "personal", today + timedelta(days=7), today + timedelta(days=7),
+            status="submitted",
+        )
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get(f"/api/v1/leave-requests/{current.id}/")
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["sick"]["label"], "ลาป่วย (วัน)")
+        self.assertEqual(rows["personal"]["label"], "ลากิจ (วัน)")
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+        self.assertEqual(rows["sick"]["current_days"], 0)
+        self.assertEqual(rows["personal"]["previous_days"], 3)
+        self.assertEqual(rows["personal"]["current_days"], 1)
+
+    def test_same_academic_year_only(self):
+        today = timezone.localdate()
+        self.make_leave("sick", today + timedelta(days=1), today + timedelta(days=2))
+        # A different academic year's approved leave must be ignored.
+        AcademicTerm.objects.create(
+            academic_year=2570, semester="1",
+            start_date=today + timedelta(days=365),
+            end_date=today + timedelta(days=455),
+        )
+        self.make_leave(
+            "sick", today + timedelta(days=400), today + timedelta(days=401)
+        )
+        current = self.make_leave(
+            "sick", today + timedelta(days=7), today + timedelta(days=7),
+            status="submitted",
+        )
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get(f"/api/v1/leave-requests/{current.id}/")
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+
+    def test_other_leave_shows_zero_current(self):
+        today = timezone.localdate()
+        current = self.make_leave(
+            "other", today + timedelta(days=1), today + timedelta(days=5),
+            status="submitted",
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get(f"/api/v1/leave-requests/{current.id}/")
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["sick"]["current_days"], 0)
+        self.assertEqual(rows["personal"]["current_days"], 0)
+
+    def test_print_document_includes_history(self):
+        today = timezone.localdate()
+        self.make_leave("personal", today + timedelta(days=1), today + timedelta(days=1))
+        current = self.make_leave(
+            "sick", today + timedelta(days=7), today + timedelta(days=8),
+            status="submitted",
+        )
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get(f"/api/v1/leave-requests/{current.id}/print/")
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["personal"]["previous_days"], 1)
+        self.assertEqual(rows["sick"]["current_days"], 2)
+
+    def test_preview_endpoint_draft_and_exclude(self):
+        today = timezone.localdate()
+        self.make_leave("sick", today + timedelta(days=1), today + timedelta(days=2))
+        editing = self.make_leave(
+            "personal", today + timedelta(days=3), today + timedelta(days=4),
+            status="submitted",
+        )
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        url = "/api/v1/leave-requests/history-summary/"
+        # Draft preview: no exclude — the submitted personal request is not
+        # approved so it never counts anyway; current days come from params.
+        response = self.client.get(
+            url,
+            {
+                "start_date": (today + timedelta(days=7)).isoformat(),
+                "end_date": (today + timedelta(days=9)).isoformat(),
+                "leave_type": "personal",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_from_list(response.data["data"])
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+        self.assertEqual(rows["personal"]["current_days"], 3)
+        self.assertEqual(rows["sick"]["current_days"], 0)
+
+        # Editing an approved request: exclude_id drops it from "ลามาแล้ว".
+        approved = self.make_leave(
+            "sick", today + timedelta(days=5), today + timedelta(days=6)
+        )
+        without = self.client.get(
+            url, {"start_date": (today + timedelta(days=7)).isoformat()}
+        )
+        with_exclude = self.client.get(
+            url,
+            {
+                "start_date": (today + timedelta(days=7)).isoformat(),
+                "exclude_id": str(approved.id),
+            },
+        )
+        self.assertEqual(
+            self.rows_from_list(without.data["data"])["sick"]["previous_days"], 4
+        )
+        self.assertEqual(
+            self.rows_from_list(with_exclude.data["data"])["sick"]["previous_days"], 2
+        )
+        self.assertIsNotNone(editing.id)
+
+    def test_admin_detail_includes_history(self):
+        today = timezone.localdate()
+        self.make_leave("sick", today + timedelta(days=1), today + timedelta(days=2))
+        current = self.make_leave(
+            "personal", today + timedelta(days=7), today + timedelta(days=7),
+            status="submitted",
+        )
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.client.get(f"/api/v1/leave-requests/{current.id}/")
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+        self.assertEqual(rows["personal"]["current_days"], 1)
+
+    def test_instructor_inbox_includes_history(self):
+        today = timezone.localdate()
+        self.make_leave("sick", today + timedelta(days=1), today + timedelta(days=2))
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        submitted = self.create_submitted()
+        leave_course = LeaveCourse.objects.get(leave_request_id=submitted["id"])
+
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        response = self.client.get(f"/api/v1/leave-courses/{leave_course.id}/")
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_by_type(response.data["data"])
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+        self.assertEqual(rows["personal"]["current_days"], 1)
+
+    def test_preview_requires_student_and_start_date(self):
+        today = timezone.localdate()
+        url = "/api/v1/leave-requests/history-summary/"
+
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        forbidden = self.client.get(
+            url, {"start_date": today.isoformat()}
+        )
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        missing = self.client.get(url)
+        self.assertEqual(missing.status_code, status.HTTP_400_BAD_REQUEST)
+        bad = self.client.get(url, {"start_date": "not-a-date"})
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
 

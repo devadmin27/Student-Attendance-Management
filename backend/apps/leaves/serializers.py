@@ -253,6 +253,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     workflow_history = LeaveWorkflowHistorySerializer(many=True, read_only=True)
     current_step = serializers.SerializerMethodField()
     available_actions = serializers.SerializerMethodField()
+    leave_history = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -271,7 +272,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "submission_deadline", "submission_grace_deadline",
             "course_count", "courses", "is_editable", "is_cancellable",
             "workflow_steps", "workflow_history", "current_step",
-            "available_actions",
+            "available_actions", "leave_history",
             "created_at", "updated_at",
         ]
         read_only_fields = fields
@@ -320,6 +321,11 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         return services.available_actions(
             getattr(request, "user", None), obj
+        )
+
+    def get_leave_history(self, obj):
+        return services.leave_history_summary(
+            obj.student, obj.start_date, current=obj
         )
 
 
@@ -433,6 +439,7 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
     )
     reviews = LeaveCourseReviewSerializer(many=True, read_only=True)
     is_reviewable = serializers.SerializerMethodField()
+    leave_history = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveCourse
@@ -448,7 +455,7 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
             "affected_start_date", "affected_end_date",
             "affected_start_time", "affected_end_time",
             "review_status", "review_status_display", "reviewed_by",
-            "reviewed_at", "reviews", "is_reviewable",
+            "reviewed_at", "reviews", "is_reviewable", "leave_history",
         ]
         read_only_fields = fields
 
@@ -466,6 +473,12 @@ class LeaveCourseInboxSerializer(serializers.ModelSerializer):
 
     def get_is_reviewable(self, obj):
         return obj.leave_request.status not in ("draft", "cancelled")
+
+    def get_leave_history(self, obj):
+        leave_request = obj.leave_request
+        return services.leave_history_summary(
+            leave_request.student, leave_request.start_date, current=leave_request
+        )
 
     def get_requires_medical_certificate(self, obj):
         return services.requires_medical_certificate(obj.leave_request)
@@ -567,6 +580,7 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
     medical_certificate_attached = serializers.SerializerMethodField()
     workflow_steps = LeaveWorkflowStepSerializer(many=True, read_only=True)
     workflow_history = LeaveWorkflowHistorySerializer(many=True, read_only=True)
+    leave_history = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
@@ -583,7 +597,7 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
             "scope", "generated_at", "courses",
             "attachments", "requires_medical_certificate",
             "medical_certificate_attached",
-            "workflow_steps", "workflow_history",
+            "workflow_steps", "workflow_history", "leave_history",
         ]
         read_only_fields = fields
 
@@ -603,6 +617,11 @@ class LeaveRequestPrintSerializer(serializers.ModelSerializer):
 
     def get_generated_at(self, obj):
         return timezone.localtime(timezone.now()).isoformat()
+
+    def get_leave_history(self, obj):
+        return services.leave_history_summary(
+            obj.student, obj.start_date, current=obj
+        )
 
     def get_requires_medical_certificate(self, obj):
         return services.requires_medical_certificate(obj)

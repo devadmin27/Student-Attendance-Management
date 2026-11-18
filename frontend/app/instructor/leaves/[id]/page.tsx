@@ -10,6 +10,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import LeaveAttachmentList from "@/components/LeaveAttachments";
+import LeaveHistoryTable from "@/components/LeaveHistoryTable";
 import { StatusBadge } from "@/components/ui";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
@@ -193,6 +194,8 @@ function InstructorLeaveDetailContent() {
             )}
           </dl>
         </div>
+
+        <LeaveHistoryTable rows={item.leave_history} />
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap items-center gap-2">

@@ -14,6 +14,7 @@
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import LeaveHistoryTable from "@/components/LeaveHistoryTable";
 import { useRequireRole, type Role } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { formatThaiDate, formatThaiDateTime } from "@/lib/format";
@@ -261,6 +262,8 @@ function LeavePrintContent() {
             </tr>
           </tbody>
         </table>
+
+        <LeaveHistoryTable rows={document.leave_history} variant="print" />
 
         <section className="mt-4">
           <h2 className="text-sm font-bold">เหตุผลการลา</h2>

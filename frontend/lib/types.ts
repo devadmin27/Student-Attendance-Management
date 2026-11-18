@@ -364,6 +364,13 @@ export interface LeaveWorkflowConfig {
   updated_at: string;
 }
 
+export interface LeaveHistoryRow {
+  leave_type: "sick" | "personal";
+  label: string;
+  previous_days: number;
+  current_days: number;
+}
+
 export interface LeaveRequest {
   id: string;
   student: string;
@@ -404,6 +411,7 @@ export interface LeaveRequest {
   workflow_history: LeaveWorkflowHistoryEntry[];
   current_step: LeaveWorkflowStep | null;
   available_actions: LeaveWorkflowAction[];
+  leave_history: LeaveHistoryRow[];
   created_at: string;
   updated_at: string;
 }
@@ -455,6 +463,7 @@ export interface LeaveCourseInboxItem {
   reviewed_at: string | null;
   reviews: LeaveCourseReview[];
   is_reviewable: boolean;
+  leave_history: LeaveHistoryRow[];
 }
 
 // ---- Printable leave document (Phase 3) ----
@@ -511,6 +520,7 @@ export interface LeavePrintDocument {
   courses: LeavePrintCourse[];
   workflow_steps: LeaveWorkflowStep[];
   workflow_history: LeaveWorkflowHistoryEntry[];
+  leave_history: LeaveHistoryRow[];
 }
 
 export interface AttendanceRecord {

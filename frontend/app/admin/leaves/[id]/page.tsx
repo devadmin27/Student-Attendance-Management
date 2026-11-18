@@ -5,6 +5,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import LeaveAttachmentList from "@/components/LeaveAttachments";
+import LeaveHistoryTable from "@/components/LeaveHistoryTable";
 import LeaveWorkflowSection, {
   hasWorkflowAction,
 } from "@/components/LeaveWorkflow";
@@ -208,6 +209,8 @@ function AdminLeaveDetailContent() {
             ให้ใช้ปุ่ม “ดำเนินการแทน” ซึ่งต้องระบุเหตุผลและจะถูกบันทึกใน Audit Log
           </p>
         </div>
+
+        <LeaveHistoryTable rows={request.leave_history} />
 
         <LeaveWorkflowSection
           steps={request.workflow_steps}
