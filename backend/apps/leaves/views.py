@@ -2,6 +2,8 @@
 
 RBAC is enforced here (and in the service layer), never by the SPA alone.
 """
+import uuid
+
 from django.db.models import Q
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
@@ -245,6 +247,60 @@ class LeaveRequestViewSet(viewsets.GenericViewSet):
             ).data["workflow_history"],
             "โหลดประวัติการพิจารณาสำเร็จ",
         )
+
+    @action(detail=False, methods=["get"], url_path="history-summary")
+    def history_summary(self, request):
+        """Live preview rows for the create/edit form (no saved request yet).
+
+        Student-only, scoped to their own profile. `start_date` doubles as the
+        academic-year reference; `exclude_id` drops the request being edited.
+        """
+        if request.user.role != "student":
+            return error_response(
+                "เฉพาะนักศึกษาที่สามารถดูประวัติการลาได้",
+                "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+        profile = getattr(request.user, "student_profile", None)
+        if profile is None:
+            return error_response(
+                "ไม่พบข้อมูลนักศึกษา", "PERMISSION_DENIED",
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        start_date = parse_date(request.query_params.get("start_date", ""))
+        if start_date is None:
+            return error_response(
+                "กรุณาระบุวันที่เริ่มลาที่ถูกต้อง", "VALIDATION_ERROR",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        end_raw = request.query_params.get("end_date")
+        end_date = parse_date(end_raw) if end_raw else start_date
+        if end_date is None:
+            return error_response(
+                "กรุณาระบุวันที่สิ้นสุดที่ถูกต้อง", "VALIDATION_ERROR",
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        exclude_id = None
+        exclude_raw = request.query_params.get("exclude_id")
+        if exclude_raw:
+            try:
+                exclude_id = uuid.UUID(str(exclude_raw))
+            except (ValueError, AttributeError, TypeError):
+                exclude_id = None
+
+        rows = services.leave_history_summary(
+            profile,
+            start_date,
+            exclude_id=exclude_id,
+            draft={
+                "leave_type": request.query_params.get("leave_type", ""),
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+        return success_response(rows, "โหลดประวัติการลาสำเร็จ")
 
     @action(detail=True, methods=["post"], url_path="admin-override")
     def admin_override(self, request, pk=None):

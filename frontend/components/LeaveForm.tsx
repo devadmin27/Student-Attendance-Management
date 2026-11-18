@@ -14,10 +14,12 @@ import { alertError, confirmDialog, toastSuccess } from "@/lib/swal";
 import LeaveAttachmentList, {
   formatFileSize,
 } from "@/components/LeaveAttachments";
+import LeaveHistoryTable from "@/components/LeaveHistoryTable";
 import type {
   AvailableLeaveCourse,
   LeaveAttachment,
   LeaveAttachmentType,
+  LeaveHistoryRow,
   LeavePolicy,
   LeaveRequest,
   LeaveType,
@@ -94,6 +96,7 @@ export default function LeaveForm({ requestId }: { requestId?: string }) {
   const [initialLoading, setInitialLoading] = useState(isEdit);
   const [saving, setSaving] = useState<"draft" | "submit" | null>(null);
   const [policy, setPolicy] = useState<LeavePolicy | null>(null);
+  const [history, setHistory] = useState<LeaveHistoryRow[]>([]);
   const [attachments, setAttachments] = useState<LeaveAttachment[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>(
     [],
@@ -225,6 +228,37 @@ export default function LeaveForm({ requestId }: { requestId?: string }) {
       clearTimeout(timer);
     };
   }, [startDate, endDate, startTime, endTime]);
+
+  // Live "ประวัติการลา" preview — needs a saved-range date; in edit mode the
+  // request being edited is excluded so it is not counted as "ลามาแล้ว".
+  useEffect(() => {
+    let cancelled = false;
+    if (!startDate) return;
+    const params: Record<string, string> = {
+      start_date: startDate,
+      leave_type: leaveType,
+    };
+    if (endDate && endDate >= startDate) params.end_date = endDate;
+    if (requestId) params.exclude_id = requestId;
+
+    void (async () => {
+      try {
+        const { data } = await samsRequest<LeaveHistoryRow[]>({
+          url: "/leave-requests/history-summary/",
+          params,
+        });
+        if (!cancelled) setHistory(data ?? []);
+      } catch {
+        // Preview is informational; saving is still validated by the server.
+        if (!cancelled) setHistory([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [startDate, endDate, leaveType, requestId]);
+
+  const historyRows = startDate ? history : [];
 
   const selectedCourses = useMemo(
     () => available.filter((course) => selected.has(course.id)),
@@ -679,6 +713,24 @@ export default function LeaveForm({ requestId }: { requestId?: string }) {
             </span>
           )}
         </p>
+
+        <div className="mt-4">
+          {startDate ? (
+            <LeaveHistoryTable
+              rows={historyRows}
+              caption="อัปเดตตามประเภทและช่วงวันที่ที่เลือก"
+            />
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+              <h2 className="text-sm font-semibold text-slate-800">
+                ประวัติการลา
+              </h2>
+              <p className="mt-2 text-xs text-slate-500">
+                เลือกวันที่เริ่มลาเพื่อดูวันลาที่ใช้ไปแล้ว
+              </p>
+            </div>
+          )}
+        </div>
 
         <div className="mt-4">
           <label htmlFor="reason" className={labelClass}>
