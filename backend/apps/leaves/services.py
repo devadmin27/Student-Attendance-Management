@@ -20,6 +20,7 @@ from apps.leaves.models import (
     LeaveAttachment,
     LeaveCourse,
     LeaveCourseReview,
+    LeavePolicyConfig,
     LeaveRequest,
     LeaveRoleAssignment,
     LeaveWorkflowConfig,
@@ -83,13 +84,34 @@ ACTION_LABELS = {
 # ---------------------------------------------------------------------------
 # Submission policy (Phase 4)
 # ---------------------------------------------------------------------------
-def leave_policy() -> dict:
-    """Policy payload for the SPA — thresholds live in Django settings only."""
+def resolved_leave_policy() -> dict[str, int]:
+    """Day limits from the admin-editable row, with settings as fallback.
+
+    The row is read on every call so an edit in Django admin applies directly.
+    If it has been removed, the original settings values keep the system alive.
+    """
+    config = LeavePolicyConfig.objects.first()
+    if config is None:
+        return {
+            "personal_advance_days": settings.LEAVE_PERSONAL_ADVANCE_DAYS,
+            "sick_normal_grace_days": settings.LEAVE_SICK_NORMAL_GRACE_DAYS,
+            "sick_late_grace_days": settings.LEAVE_SICK_LATE_GRACE_DAYS,
+            "medical_certificate_min_days": (
+                settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS
+            ),
+        }
     return {
-        "personal_advance_days": settings.LEAVE_PERSONAL_ADVANCE_DAYS,
-        "sick_normal_grace_days": settings.LEAVE_SICK_NORMAL_GRACE_DAYS,
-        "sick_late_grace_days": settings.LEAVE_SICK_LATE_GRACE_DAYS,
-        "medical_certificate_min_days": settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS,
+        "personal_advance_days": config.personal_advance_days,
+        "sick_normal_grace_days": config.sick_normal_grace_days,
+        "sick_late_grace_days": config.sick_late_grace_days,
+        "medical_certificate_min_days": config.medical_certificate_min_days,
+    }
+
+
+def leave_policy() -> dict:
+    """Policy payload for the SPA — day limits come from the resolved policy."""
+    return {
+        **resolved_leave_policy(),
         "max_attachment_bytes": settings.LEAVE_ATTACHMENT_MAX_BYTES,
         "max_attachment_count": settings.LEAVE_ATTACHMENT_MAX_COUNT,
         "allowed_attachment_extensions": settings.LEAVE_ATTACHMENT_ALLOWED_EXTENSIONS,
@@ -203,6 +225,8 @@ def submission_deadlines(
     leave_type: str,
     start_date: date,
     end_date: date,
+    *,
+    policy: dict[str, int] | None = None,
 ) -> tuple[date | None, date | None]:
     """Return (normal deadline, late-grace deadline) for a request.
 
@@ -210,25 +234,32 @@ def submission_deadlines(
     - sick: normal deadline is end_date + normal grace (day after the leave);
       the late-grace deadline is end_date + late grace.
     - other: no timing restriction.
+
+    `policy` lets a caller reuse one resolved snapshot; otherwise it is read
+    fresh from `resolved_leave_policy()`.
     """
+    policy = policy if policy is not None else resolved_leave_policy()
     if leave_type == "personal":
         return (
-            start_date - timedelta(days=settings.LEAVE_PERSONAL_ADVANCE_DAYS),
+            start_date - timedelta(days=policy["personal_advance_days"]),
             None,
         )
     if leave_type == "sick":
         return (
-            end_date + timedelta(days=settings.LEAVE_SICK_NORMAL_GRACE_DAYS),
-            end_date + timedelta(days=settings.LEAVE_SICK_LATE_GRACE_DAYS),
+            end_date + timedelta(days=policy["sick_normal_grace_days"]),
+            end_date + timedelta(days=policy["sick_late_grace_days"]),
         )
     return None, None
 
 
-def requires_medical_certificate(leave_request: LeaveRequest) -> bool:
+def requires_medical_certificate(
+    leave_request: LeaveRequest,
+    policy: dict[str, int] | None = None,
+) -> bool:
+    policy = policy if policy is not None else resolved_leave_policy()
     return (
         leave_request.leave_type == "sick"
-        and leave_request.total_days
-        >= settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS
+        and leave_request.total_days >= policy["medical_certificate_min_days"]
     )
 
 
@@ -245,17 +276,19 @@ def validate_submission_timing(
     if leave_request.leave_type not in ("personal", "sick"):
         return
     today = today or timezone.localdate()
+    policy = resolved_leave_policy()
     normal_deadline, grace_deadline = submission_deadlines(
         leave_request.leave_type,
         leave_request.start_date,
         leave_request.end_date,
+        policy=policy,
     )
     if leave_request.leave_type == "personal":
         if normal_deadline is not None and today > normal_deadline:
             raise ValidationError(
                 {"start_date": [
                     "ลากิจส่วนตัวต้องส่งล่วงหน้าอย่างน้อย "
-                    f"{settings.LEAVE_PERSONAL_ADVANCE_DAYS} วัน "
+                    f"{policy['personal_advance_days']} วัน "
                     f"(ภายใน {normal_deadline.strftime('%d/%m/%Y')})"
                 ]}
             )
@@ -265,7 +298,7 @@ def validate_submission_timing(
         raise ValidationError(
             {"end_date": [
                 "เลยกำหนดส่งใบลาป่วยแล้ว — ส่งได้ไม่เกิน "
-                f"{settings.LEAVE_SICK_LATE_GRACE_DAYS} วันหลังวันสิ้นสุดการลา "
+                f"{policy['sick_late_grace_days']} วันหลังวันสิ้นสุดการลา "
                 f"(ภายใน {grace_deadline.strftime('%d/%m/%Y')})"
             ]}
         )
@@ -281,8 +314,12 @@ def validate_submission_timing(
         )
 
 
-def validate_medical_certificate(leave_request: LeaveRequest) -> None:
-    if not requires_medical_certificate(leave_request):
+def validate_medical_certificate(
+    leave_request: LeaveRequest,
+    policy: dict[str, int] | None = None,
+) -> None:
+    policy = policy if policy is not None else resolved_leave_policy()
+    if not requires_medical_certificate(leave_request, policy=policy):
         return
     if not leave_request.attachments.filter(
         attachment_type="medical_certificate"
@@ -290,7 +327,7 @@ def validate_medical_certificate(leave_request: LeaveRequest) -> None:
         raise ValidationError(
             {"attachments": [
                 "ลาป่วยตั้งแต่ "
-                f"{settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS} วันขึ้นไป "
+                f"{policy['medical_certificate_min_days']} วันขึ้นไป "
                 "ต้องแนบใบรับรองแพทย์ก่อนส่งคำร้อง"
             ]}
         )

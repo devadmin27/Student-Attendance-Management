@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from datetime import datetime, time, timedelta
 
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.utils import timezone
@@ -14,10 +15,12 @@ from apps.academics.models import AcademicTerm, Program
 from apps.attendance.models import AttendanceRecord, AttendanceSession
 from apps.audit.models import AuditLog
 from apps.courses.models import Course, CourseOffering, Enrollment
+from apps.leaves import services
 from apps.leaves.models import (
     LeaveAttachment,
     LeaveCourse,
     LeaveCourseReview,
+    LeavePolicyConfig,
     LeaveRequest,
     LeaveRoleAssignment,
     LeaveWorkflowConfig,
@@ -663,6 +666,127 @@ class LeaveSubmissionPolicyTests(LeaveTestBase):
         self.assertEqual(
             document["late_submission_reason"], "ต้องพักรักษาตัวต่อเนื่อง"
         )
+
+
+class LeavePolicyConfigTests(LeaveTestBase):
+    """Admin-editable day limits (singleton row, settings as fallback)."""
+
+    def _submit(self, request_id):
+        return self.client.post(
+            f"/api/v1/leave-requests/{request_id}/submit/", {}, format="json"
+        )
+
+    def _policy(self):
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get("/api/v1/leave-requests/policy/")
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data["data"]
+
+    def test_seeded_row_is_the_singleton_source_of_truth(self):
+        config = LeavePolicyConfig.objects.get()
+        self.assertEqual(config.personal_advance_days, 3)
+        self.assertEqual(config.sick_normal_grace_days, 1)
+        self.assertEqual(config.sick_late_grace_days, 3)
+        self.assertEqual(config.medical_certificate_min_days, 3)
+        self.assertEqual(
+            services.resolved_leave_policy(),
+            {
+                "personal_advance_days": 3,
+                "sick_normal_grace_days": 1,
+                "sick_late_grace_days": 3,
+                "medical_certificate_min_days": 3,
+            },
+        )
+
+    def test_editing_row_changes_endpoint_deadlines_and_validation(self):
+        config = LeavePolicyConfig.objects.get()
+        config.personal_advance_days = 5
+        config.sick_normal_grace_days = 2
+        config.sick_late_grace_days = 4
+        config.medical_certificate_min_days = 4
+        config.save()
+
+        policy = self._policy()
+        self.assertEqual(policy["personal_advance_days"], 5)
+        self.assertEqual(policy["sick_normal_grace_days"], 2)
+        self.assertEqual(policy["sick_late_grace_days"], 4)
+        self.assertEqual(policy["medical_certificate_min_days"], 4)
+
+        today = timezone.localdate()
+        next_week = today + timedelta(days=5)
+        self.assertEqual(
+            services.submission_deadlines("personal", next_week, next_week),
+            (today, None),
+        )
+        self.assertEqual(
+            services.submission_deadlines(
+                "sick", today - timedelta(days=1), today
+            ),
+            (today + timedelta(days=2), today + timedelta(days=4)),
+        )
+
+        draft = self.create_draft(
+            start_date=(today + timedelta(days=4)).isoformat(),
+            end_date=(today + timedelta(days=4)).isoformat(),
+        )
+        response = self._submit(draft.data["data"]["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("5 วัน", response.data["errors"]["start_date"][0])
+
+        # At a threshold of 4 days, a 3-day sick leave needs no certificate.
+        three_day = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=2)).isoformat(),
+            end_date=today.isoformat(),
+        )
+        response = self._submit(three_day.data["data"]["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["data"]["requires_medical_certificate"])
+
+        four_day = self.create_draft(
+            leave_type="sick",
+            start_date=(today - timedelta(days=3)).isoformat(),
+            end_date=today.isoformat(),
+        )
+        response = self._submit(four_day.data["data"]["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("4 วันขึ้นไป", response.data["errors"]["attachments"][0])
+
+    def test_falls_back_to_settings_when_row_is_absent(self):
+        LeavePolicyConfig.objects.all().delete()
+        with override_settings(
+            LEAVE_PERSONAL_ADVANCE_DAYS=2,
+            LEAVE_SICK_NORMAL_GRACE_DAYS=5,
+            LEAVE_SICK_LATE_GRACE_DAYS=6,
+            LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS=4,
+        ):
+            policy = self._policy()
+            self.assertEqual(policy["personal_advance_days"], 2)
+            self.assertEqual(policy["sick_normal_grace_days"], 5)
+            self.assertEqual(policy["sick_late_grace_days"], 6)
+            self.assertEqual(policy["medical_certificate_min_days"], 4)
+
+            today = timezone.localdate()
+            self.assertEqual(
+                services.submission_deadlines("sick", today, today),
+                (today + timedelta(days=5), today + timedelta(days=6)),
+            )
+
+    def test_model_enforces_singleton_and_value_ranges(self):
+        config = LeavePolicyConfig.objects.get()
+        config.personal_advance_days = 31
+        with self.assertRaises(ValidationError):
+            config.full_clean()
+        config.personal_advance_days = 3
+
+        config.sick_normal_grace_days = 5
+        config.sick_late_grace_days = 4
+        with self.assertRaises(ValidationError):
+            config.full_clean()
+
+        with self.assertRaises(ValidationError):
+            LeavePolicyConfig.objects.create()
+        self.assertEqual(LeavePolicyConfig.objects.count(), 1)
 
 
 class LeaveFormDetailsTests(LeaveTestBase):

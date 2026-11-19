@@ -278,7 +278,10 @@ SIMPLE_JWT = {
 
 
 # ---------------------------------------------------------------------------
-# Student leave policy (Phase 4) — configurable, never hardcoded in the SPA.
+# Student leave policy (Phase 4) — defaults/fallback only. The active day
+# limits live in the singleton LeavePolicyConfig row (Django admin); these
+# values seed that row and are used when the row is absent. Never hardcoded
+# in the SPA. Keep the existing validation ranges in sync with the model.
 # Personal leave must be filed in advance; sick leave may be filed up to the
 # day after it ends, with a short grace period when a reason is supplied.
 # A sick leave of N+ days requires a medical certificate attachment.
