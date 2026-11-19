@@ -16,7 +16,9 @@ these tables and displays a separate leave badge.
 import uuid
 from pathlib import Path
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -465,3 +467,83 @@ class LeaveWorkflowHistory(models.Model):
 
     def __str__(self):
         return f"{self.leave_request_id} {self.action}"
+
+
+def _default_personal_advance_days() -> int:
+    return settings.LEAVE_PERSONAL_ADVANCE_DAYS
+
+
+def _default_sick_normal_grace_days() -> int:
+    return settings.LEAVE_SICK_NORMAL_GRACE_DAYS
+
+
+def _default_sick_late_grace_days() -> int:
+    return settings.LEAVE_SICK_LATE_GRACE_DAYS
+
+
+def _default_medical_certificate_min_days() -> int:
+    return settings.LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS
+
+
+class LeavePolicyConfig(models.Model):
+    """นโยบายการส่งใบลา — แถวเดียวสำหรับทั้งระบบ แก้ไขผ่าน Django admin.
+
+    แถวในฐานข้อมูลเป็นแหล่งความจริง (อ่านใหม่ทุกครั้งที่มีการเรียกใช้งาน) และค่า
+    settings เดิมใช้เป็นค่าเริ่มต้น/สำรองเมื่อยังไม่มีแถว Migration 0006
+    สร้างแถวแรกจากค่า settings ปัจจุบัน
+    """
+
+    personal_advance_days = models.PositiveSmallIntegerField(
+        "ลากิจต้องส่งล่วงหน้าอย่างน้อยกี่วัน",
+        default=_default_personal_advance_days,
+        validators=[MinValueValidator(0), MaxValueValidator(30)],
+        help_text="จำนวนวันก่อนวันเริ่มลาที่ต้องส่งคำร้อง (0–30)",
+    )
+    sick_normal_grace_days = models.PositiveSmallIntegerField(
+        "ลาป่วยส่งภายในกี่วันหลังวันสิ้นสุด",
+        default=_default_sick_normal_grace_days,
+        validators=[MinValueValidator(0), MaxValueValidator(7)],
+        help_text="เกินกว่านี้ต้องระบุเหตุผลการส่งย้อนหลัง (0–7)",
+    )
+    sick_late_grace_days = models.PositiveSmallIntegerField(
+        "ลาป่วยผ่อนผันได้ถึงกี่วันหลังวันสิ้นสุด",
+        default=_default_sick_late_grace_days,
+        validators=[MinValueValidator(0)],
+        help_text="ต้องไม่น้อยกว่าจำนวนวันส่งปกติ เกินกว่านี้ปฏิเสธการส่ง",
+    )
+    medical_certificate_min_days = models.PositiveSmallIntegerField(
+        "ลาป่วยตั้งแต่กี่วันขึ้นไปต้องแนบใบรับรองแพทย์",
+        default=_default_medical_certificate_min_days,
+        validators=[MinValueValidator(1), MaxValueValidator(30)],
+        help_text="นับรวมวันเริ่มลาและวันสิ้นสุดการลา (1–30)",
+    )
+    updated_at = models.DateTimeField("ปรับปรุงล่าสุดเมื่อ", auto_now=True)
+
+    class Meta:
+        db_table = "leave_policy_configs"
+        verbose_name = "การตั้งค่านโยบายการลา"
+        verbose_name_plural = "การตั้งค่านโยบายการลา"
+
+    def __str__(self):
+        return "นโยบายการส่งใบลา (ทั้งระบบ)"
+
+    def clean(self):
+        super().clean()
+        if (
+            self.sick_late_grace_days is not None
+            and self.sick_normal_grace_days is not None
+            and self.sick_late_grace_days < self.sick_normal_grace_days
+        ):
+            raise ValidationError({
+                "sick_late_grace_days": (
+                    "จำนวนวันผ่อนผันต้องมากกว่าหรือเท่ากับจำนวนวันส่งปกติ"
+                ),
+            })
+
+    def save(self, *args, **kwargs):
+        if not self.pk and type(self).objects.exists():
+            raise ValidationError(
+                "มีการตั้งค่านโยบายการลาแล้ว กรุณาแก้ไขรายการเดิม"
+            )
+        self.full_clean()
+        super().save(*args, **kwargs)

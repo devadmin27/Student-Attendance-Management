@@ -160,6 +160,24 @@
 - การเปลี่ยนหรือลบการตั้งค่ามีผลกับคำร้องที่ส่งใหม่หรือส่งอีกครั้งเท่านั้น คำร้องที่อยู่ระหว่างพิจารณาจะคงขั้นตอนเดิมที่สร้างไว้แล้ว
 - การดำเนินการแทนโดยผู้ดูแลระบบ (admin override) ต้องเลือกปลายทางได้เฉพาะบทบาทที่มีอยู่จริงในคำร้องนั้น หาก Workflow ไม่มีขั้นดังกล่าวต้องตอบ HTTP 400
 
+### 4.8 การตั้งค่านโยบายการส่งใบลา (Phase 4)
+
+ผู้ดูแลระบบกำหนดจำนวนวันได้จาก Django admin (`LeavePolicyConfig`) โดยมีได้เพียงแถวเดียวสำหรับทั้งระบบ
+
+| การตั้งค่า | ความหมาย | ค่าเริ่มต้น | ช่วงที่อนุญาต |
+|---|---|---|---|
+| `personal_advance_days` | ลากิจส่วนตัวต้องส่งล่วงหน้าอย่างน้อยกี่วันก่อนวันเริ่มลา | 3 | 0–30 |
+| `sick_normal_grace_days` | ลาป่วยส่งได้ถึงกี่วันหลังวันสิ้นสุดการลาโดยไม่ต้องระบุเหตุผลย้อนหลัง | 1 | 0–7 |
+| `sick_late_grace_days` | ลาป่วยผ่อนผันได้ถึงกี่วันหลังวันสิ้นสุดการลา (ต้องระบุ `late_submission_reason`) | 3 | ≥ `sick_normal_grace_days` |
+| `medical_certificate_min_days` | ลาป่วยตั้งแต่กี่วันขึ้นไปต้องแนบใบรับรองแพทย์ (นับรวมวันเริ่มและวันสิ้นสุด) | 3 | 1–30 |
+
+- แถวในฐานข้อมูลเป็นแหล่งความจริง admin ไม่ให้เพิ่มแถวที่สองหรือลบแถวเดิม และระบบปฏิเสธค่าที่อยู่นอกช่วงหรือค่าผ่อนผันที่น้อยกว่าค่าส่งปกติ
+- ค่าเริ่มต้นมาจาก Django settings เดิม (`LEAVE_PERSONAL_ADVANCE_DAYS`, `LEAVE_SICK_NORMAL_GRACE_DAYS`, `LEAVE_SICK_LATE_GRACE_DAYS`, `LEAVE_MEDICAL_CERTIFICATE_MIN_DAYS`) migration `0006_leavepolicyconfig` สร้างแถวแรกจากค่าเหล่านี้ และใช้ค่า settings เป็น fallback หากแถวถูกลบ
+- ทุกการอ่าน (`GET /leave-requests/policy/`, วันกำหนดในคำร้อง, การตรวจเวลาตอนส่ง, และกฎใบรับรองแพทย์) เรียก resolver ตัวเดียวกัน การแก้ค่าใน admin จึงมีผลทันที
+- วันกำหนดแสดงผลแบบ live ไม่ได้ snapshot ลงคำร้องเดิม การแก้ไขนโยบายอาจเปลี่ยนวันกำหนดที่คำร้องเก่าแสดงได้
+- `resubmit` ยังข้ามการตรวจเรื่องเวลาตามเดิม ส่วนไฟล์แนบและขีดจำกัดอื่น ๆ ยังอ่านจาก settings เหมือนเดิม
+- ชื่อฟิลด์ใน API ไม่เปลี่ยน จึงไม่ต้องแก้ Frontend (`LeaveForm` อ่าน `policy.*` เหมือนเดิม)
+
 ## 5. Attendance Integration
 
 เมื่อมีการเช็คชื่อในรายวิชาที่นักศึกษาได้ยื่นคำร้องลาไว้ ระบบต้องตรวจสอบความสัมพันธ์ระหว่าง
@@ -345,6 +363,7 @@ LeaveCourse แต่ละรายการต้องเชื่อมโ�
 | `GET/POST/PATCH/DELETE /leave-role-assignments/` | admin | จัดการ `LeaveRoleAssignment` |
 | `GET/POST/PATCH/DELETE /leave-workflow-configs/` | admin | จัดการ `LeaveWorkflowConfig` (ลำดับขั้นตอน 2–3 ขั้นตามขอบเขต) |
 | `GET /leave-requests/{id}/print/` | student, instructor, admin | เอกสารพิมพ์ A4 ตามขอบเขตสิทธิ์ |
+| `GET /leave-requests/policy/` | student, instructor, admin | นโยบายการส่งใบลาที่ resolve จาก `LeavePolicyConfig` (หรือ settings เมื่อไม่มีแถว) |
 
 `available_actions` ใน payload ของคำร้องใช้บอก Frontend ว่าผู้ใช้ปัจจุบันทำอะไรได้
 แต่ทุก endpoint ต้องตรวจสอบขั้นตอนปัจจุบัน ผู้รับผิดชอบ และสิทธิ์ซ้ำที่ Service Layer เสมอ
@@ -415,8 +434,9 @@ LeaveCourse แต่ละรายการต้องเชื่อมโ�
 
 ### 11.1 ข้อกำหนดก่อน Deploy (Workflow ยืดหยุ่น)
 
-- ต้องรัน migration ของแอป `leaves` ก่อนเปิดใช้งานฟีเจอร์ (migration `0005_leaveworkflowconfig`)
+- ต้องรัน migration ของแอป `leaves` ก่อนเปิดใช้งานฟีเจอร์ (migration `0005_leaveworkflowconfig` และ `0006_leavepolicyconfig`)
   ผ่านขั้นตอน deploy ของผู้ดูแลระบบ (Coolify UI) — ห้ามรัน migration ด้วยมือบน Production โดยไม่มีการสำรองข้อมูล
+- migration `0006_leavepolicyconfig` สร้างแถวตั้งค่านโยบายจากค่า settings ปัจจุบัน ตรวจสอบค่าใน Django admin หลัง deploy ก่อนเปิดให้นักศึกษาส่งคำร้อง
 - ฐานข้อมูล Production คือ Supabase PostgreSQL การรัน migration ต้องสำเร็จก่อน deploy Frontend เวอร์ชันที่เรียก `/leave-workflow-configs/`
 - หลัง migrate ระบบใช้งานได้ทันทีโดยไม่ต้องสร้างข้อมูลตั้งค่า เนื่องจากไม่มีรายการที่เปิดใช้งาน = ใช้ Workflow เริ่มต้น 3 ขั้น
 - ต้องมี `LeaveRoleAssignment` ครบทุกบทบาทที่ใช้จริงในแต่ละขอบเขต มิฉะนั้นการส่งคำร้องจะถูกปฏิเสธ (HTTP 400) พร้อมระบุบทบาทที่ขาด

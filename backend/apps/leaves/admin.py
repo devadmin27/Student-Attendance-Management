@@ -5,6 +5,7 @@ from apps.leaves.models import (
     LeaveAttachment,
     LeaveCourse,
     LeaveCourseReview,
+    LeavePolicyConfig,
     LeaveRequest,
     LeaveRoleAssignment,
     LeaveWorkflowConfig,
@@ -67,6 +68,34 @@ class LeaveWorkflowConfigAdmin(admin.ModelAdmin):
     list_display = ["name", "program", "class_group", "academic_term", "steps", "is_active"]
     list_filter = ["is_active", "program", "academic_term"]
     search_fields = ["name", "program__program_name", "class_group__group_name"]
+
+
+@admin.register(LeavePolicyConfig)
+class LeavePolicyConfigAdmin(admin.ModelAdmin):
+    list_display = [
+        "personal_advance_days", "sick_normal_grace_days",
+        "sick_late_grace_days", "medical_certificate_min_days", "updated_at",
+    ]
+    readonly_fields = ["updated_at"]
+    fieldsets = (
+        (None, {
+            "fields": (
+                "personal_advance_days", "sick_normal_grace_days",
+                "sick_late_grace_days", "medical_certificate_min_days",
+                "updated_at",
+            ),
+            "description": (
+                "ตั้งค่าได้ครั้งละหนึ่งแถวสำหรับทั้งระบบ การเปลี่ยนแปลงมีผลทันที"
+                "กับการส่งคำร้องใหม่และวันกำหนดที่แสดงในคำร้องเดิม"
+            ),
+        }),
+    )
+
+    def has_add_permission(self, request):
+        return not LeavePolicyConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(LeaveWorkflowStep)
