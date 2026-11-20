@@ -144,7 +144,17 @@ def _academic_year_for(day: date) -> int:
 
 
 def _academic_year_range(year: int) -> tuple[date, date]:
-    """Date span of an academic year, from its stored terms when available."""
+    """Date span used to count a Thai academic year's leave history.
+
+    `_academic_year_for()` maps any date without a covering term to the plain
+    Thai-year convention (Gregorian year + 543). The counting range must cover
+    those dates too — otherwise an approved leave taken outside the stored
+    term windows (e.g. after the last semester ends) silently becomes 0 in
+    "ลามาแล้ว". Extend the stored term span with that calendar year.
+    """
+    gregorian_year = year - 543
+    calendar_start = date(gregorian_year, 1, 1)
+    calendar_end = date(gregorian_year, 12, 31)
     spans = list(
         AcademicTerm.objects.filter(academic_year=year).values_list(
             "start_date", "end_date"
@@ -152,11 +162,10 @@ def _academic_year_range(year: int) -> tuple[date, date]:
     )
     if spans:
         return (
-            min(start for start, _ in spans),
-            max(end for _, end in spans),
+            min(calendar_start, min(start for start, _ in spans)),
+            max(calendar_end, max(end for _, end in spans)),
         )
-    gregorian_year = year - 543
-    return date(gregorian_year, 1, 1), date(gregorian_year, 12, 31)
+    return calendar_start, calendar_end
 
 
 def _inclusive_days(start: date | None, end: date | None) -> int:

@@ -1,7 +1,7 @@
 """Student leave tests — submission policy, reviews, print, attendance."""
 import shutil
 import tempfile
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -2155,6 +2155,32 @@ class LeaveHistoryTests(LeaveTestBase):
         response = self.client.get(f"/api/v1/leave-requests/{current.id}/")
         rows = self.rows_by_type(response.data["data"])
         self.assertEqual(rows["sick"]["previous_days"], 2)
+
+    def test_leave_outside_stored_term_range_still_counts(self):
+        # Real data can have approved leave after the last stored semester.
+        # It belongs to the same Thai academic year and must not become 0.
+        reference = timezone.localdate()
+        thai_year = reference.year + 543
+        AcademicTerm.objects.update(
+            academic_year=thai_year,
+            start_date=date(reference.year, 1, 1),
+            end_date=date(reference.year, 3, 31),
+        )
+        approved_start = date(reference.year, 11, 1)
+        self.make_leave(
+            "sick", approved_start, approved_start + timedelta(days=1)
+        )
+
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        response = self.client.get(
+            "/api/v1/leave-requests/history-summary/",
+            {"start_date": date(reference.year, 11, 20).isoformat(),
+             "leave_type": "sick"},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = self.rows_from_list(response.data["data"])
+        self.assertEqual(rows["sick"]["previous_days"], 2)
+        self.assertEqual(rows["sick"]["current_days"], 1)
 
     def test_other_leave_shows_zero_current(self):
         today = timezone.localdate()
