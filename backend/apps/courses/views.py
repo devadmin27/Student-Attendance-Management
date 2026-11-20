@@ -482,9 +482,9 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         except (CourseOffering.DoesNotExist, ValueError, ValidationError):
             return error_response("ไม่พบรายวิชาที่เปิดสอนที่ระบุ", "ERROR", 400)
         try:
-            students = StudentProfile.objects.filter(class_group_id=group_id, status="active")
+            students = StudentProfile.objects.filter(class_group_id=group_id, status="studying")
             if not students.exists() and not request.data.get("allow_empty"):
-                return error_response("ไม่พบนักศึกษาที่ใช้งานอยู่ในกลุ่มเรียนที่ระบุ", "ERROR", 400)
+                return error_response("ไม่พบนักศึกษาที่กำลังศึกษาในกลุ่มเรียนที่ระบุ", "ERROR", 400)
         except ValueError:
             return error_response("ไม่พบกลุ่มเรียนที่ระบุ", "ERROR", 400)
         self._own_offering_or_403(offering)
@@ -495,7 +495,7 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
                 400,
             )
 
-        students = StudentProfile.objects.filter(class_group_id=group_id, status="active")
+        students = StudentProfile.objects.filter(class_group_id=group_id, status="studying")
         created = skipped = dropped = 0
         with transaction.atomic():
             for student in students:

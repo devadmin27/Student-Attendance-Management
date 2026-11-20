@@ -84,7 +84,7 @@ def run():
                 student_code=f"65000{i:03d}",
                 first_name=fn, last_name=ln,
                 program=program, class_group=group if i <= 6 else group2,
-                academic_year_level=1 if i <= 6 else 3, status="active",
+                academic_year_level=1 if i <= 6 else 3, status="studying",
             )
             students.append(StudentProfile.objects.get(user=u))
 

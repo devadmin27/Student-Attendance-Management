@@ -717,7 +717,7 @@ paths:
           description: ''
   /api/v1/attendance/sessions/{id}/roster/:
     get:
-      operationId: attendance_sessions_roster_retrieve
+      operationId: attendance_sessions_roster_list
       description: Create/read sessions; lifecycle managed via /open /pause /close
         /cancel.
       parameters:
@@ -726,6 +726,30 @@ paths:
         schema:
           type: string
         required: true
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
       tags:
       - attendance
       security:
@@ -735,7 +759,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AttendanceSession'
+                $ref: '#/components/schemas/PaginatedSessionRosterList'
           description: ''
   /api/v1/audit-logs/:
     get:
@@ -1890,6 +1914,13 @@ paths:
           description: ''
     delete:
       operationId: enrollments_destroy
+      description: |-
+        Hard-delete only when the student has no attendance history.
+
+        Enrollment rows can be deleted independently of attendance records
+        (there is no FK), so deleting a used enrollment would silently detach
+        the student's check-in history. Withdrawing keeps the row/status and is
+        the correct operation once a course has started.
       parameters:
       - in: path
         name: id
@@ -1905,6 +1936,162 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/enrollments/{id}/reinstate/:
+    post:
+      operationId: enrollments_reinstate_create
+      description: Undo a withdrawal — only while the offering is still running.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/v1/enrollments/{id}/withdraw/:
+    post:
+      operationId: enrollments_withdraw_create
+      description: Withdraw (ถอน) — keep the row and all attendance history.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this enrollment.
+        required: true
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/v1/enrollments/batch-delete/:
+    post:
+      operationId: enrollments_batch_delete_create
+      description: Delete many enrollments — only rows without attendance history.
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/v1/enrollments/batch-withdraw/:
+    post:
+      operationId: enrollments_batch_withdraw_create
+      description: |-
+        Withdraw many enrollments — keeps every attendance record.
+
+        Each row is handled independently: already-dropped rows are reported as
+        skipped and completed rows as failed, so one bad row never cancels the
+        rest of the batch.
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
+  /api/v1/enrollments/bulk/:
+    post:
+      operationId: enrollments_bulk_create
+      description: 'ลงทะเบียนทั้งกลุ่มเรียน: POST {course_offering, class_group}.'
+      tags:
+      - enrollments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+          description: ''
   /api/v1/health/:
     get:
       operationId: health_retrieve
@@ -1924,6 +2111,9 @@ paths:
   /api/v1/instructors/:
     get:
       operationId: instructors_list
+      description: |-
+        Instructors list — admin CRUD; instructors may READ (option pickers
+        for co-instructor selection on their management pages).
       parameters:
       - name: ordering
         required: false
@@ -1975,6 +2165,9 @@ paths:
           description: ''
     post:
       operationId: instructors_create
+      description: |-
+        Instructors list — admin CRUD; instructors may READ (option pickers
+        for co-instructor selection on their management pages).
       tags:
       - instructors
       requestBody:
@@ -2001,6 +2194,9 @@ paths:
   /api/v1/instructors/{id}/:
     get:
       operationId: instructors_retrieve
+      description: |-
+        Instructors list — admin CRUD; instructors may READ (option pickers
+        for co-instructor selection on their management pages).
       parameters:
       - in: path
         name: id
@@ -2022,6 +2218,9 @@ paths:
           description: ''
     put:
       operationId: instructors_update
+      description: |-
+        Instructors list — admin CRUD; instructors may READ (option pickers
+        for co-instructor selection on their management pages).
       parameters:
       - in: path
         name: id
@@ -2055,6 +2254,9 @@ paths:
           description: ''
     patch:
       operationId: instructors_partial_update
+      description: |-
+        Instructors list — admin CRUD; instructors may READ (option pickers
+        for co-instructor selection on their management pages).
       parameters:
       - in: path
         name: id
@@ -2087,6 +2289,14 @@ paths:
           description: ''
     delete:
       operationId: instructors_destroy
+      description: |-
+        Delete the instructor row together with their login account.
+
+        The profile is a OneToOne CASCADE of the user, so removing the account
+        removes the instructor too. Accounts still referenced by PROTECT
+        relations (attendance sessions, course offerings, append-only audit
+        logs) cannot be removed without losing history — those are deactivated
+        instead, matching ``UserViewSet.destroy``.
       parameters:
       - in: path
         name: id
@@ -2097,6 +2307,1306 @@ paths:
         required: true
       tags:
       - instructors
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/leave-approvals/:
+    get:
+      operationId: leave_approvals_list
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: query
+        name: end_date__gte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: end_date__lte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: leave_type
+        schema:
+          type: string
+          title: ประเภทการลา
+          enum:
+          - other
+          - personal
+          - sick
+        description: |-
+          * `sick` - ลาป่วย
+          * `personal` - ลากิจส่วนตัว
+          * `other` - ลาอื่น ๆ
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: start_date__gte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: start_date__lte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะคำร้อง
+          enum:
+          - approved
+          - cancelled
+          - draft
+          - pending_advisor_review
+          - pending_final_approval
+          - pending_program_head_review
+          - rejected
+          - returned
+          - submitted
+        description: |-
+          * `draft` - แบบร่าง
+          * `submitted` - ส่งคำร้องแล้ว
+          * `pending_advisor_review` - รอความเห็นอาจารย์ที่ปรึกษา
+          * `pending_program_head_review` - รอความเห็นหัวหน้าหน่วยหลักสูตร
+          * `pending_final_approval` - รอผู้มีอำนาจอนุมัติ
+          * `approved` - อนุญาต
+          * `rejected` - ไม่อนุญาต
+          * `returned` - ส่งกลับเพื่อแก้ไข
+          * `cancelled` - ยกเลิกคำร้อง
+      - in: query
+        name: student
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLeaveRequestList'
+          description: ''
+  /api/v1/leave-approvals/{id}/:
+    get:
+      operationId: leave_approvals_retrieve
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-approvals/{id}/advisor-opinion/:
+    post:
+      operationId: leave_approvals_advisor_opinion_create
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-approvals/{id}/final-decision/:
+    post:
+      operationId: leave_approvals_final_decision_create
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-approvals/{id}/program-head-opinion/:
+    post:
+      operationId: leave_approvals_program_head_opinion_create
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-approvals/{id}/return/:
+    post:
+      operationId: leave_approvals_return_create
+      description: |-
+        Approval inbox and decision endpoints (advisor/head/final approver).
+
+        Instructors only see requests where they are (or were) an assignee;
+        admins see every in-flight request so the documented exception path can
+        be used. Every action re-checks the current step and assignee in the
+        service layer.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-approvals
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-courses/:
+    get:
+      operationId: leave_courses_list
+      description: Instructor course inbox (own offerings only) and admin read-only
+        view.
+      parameters:
+      - in: query
+        name: course_offering
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: leave_request
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: leave_request__start_date__gte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: leave_request__start_date__lte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: leave_request__status
+        schema:
+          type: string
+          title: สถานะคำร้อง
+          enum:
+          - approved
+          - cancelled
+          - draft
+          - pending_advisor_review
+          - pending_final_approval
+          - pending_program_head_review
+          - rejected
+          - returned
+          - submitted
+        description: |-
+          * `draft` - แบบร่าง
+          * `submitted` - ส่งคำร้องแล้ว
+          * `pending_advisor_review` - รอความเห็นอาจารย์ที่ปรึกษา
+          * `pending_program_head_review` - รอความเห็นหัวหน้าหน่วยหลักสูตร
+          * `pending_final_approval` - รอผู้มีอำนาจอนุมัติ
+          * `approved` - อนุญาต
+          * `rejected` - ไม่อนุญาต
+          * `returned` - ส่งกลับเพื่อแก้ไข
+          * `cancelled` - ยกเลิกคำร้อง
+      - in: query
+        name: leave_request__student
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: review_status
+        schema:
+          type: string
+          title: สถานะการพิจารณารายวิชา
+          enum:
+          - acknowledged
+          - pending
+          - rejected
+          - reviewed
+        description: |-
+          * `pending` - รอการพิจารณา
+          * `reviewed` - ให้ความเห็นแล้ว
+          * `acknowledged` - รับทราบ
+          * `rejected` - ไม่เห็นด้วย
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - leave-courses
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLeaveCourseInboxList'
+          description: ''
+  /api/v1/leave-courses/{id}/:
+    get:
+      operationId: leave_courses_retrieve
+      description: Instructor course inbox (own offerings only) and admin read-only
+        view.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave course.
+        required: true
+      tags:
+      - leave-courses
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveCourseInbox'
+          description: ''
+  /api/v1/leave-courses/{id}/review/:
+    post:
+      operationId: leave_courses_review_create
+      description: Instructor course inbox (own offerings only) and admin read-only
+        view.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave course.
+        required: true
+      tags:
+      - leave-courses
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveCourseInbox'
+          description: ''
+  /api/v1/leave-requests/:
+    get:
+      operationId: leave_requests_list
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: query
+        name: end_date__gte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: end_date__lte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: leave_type
+        schema:
+          type: string
+          title: ประเภทการลา
+          enum:
+          - other
+          - personal
+          - sick
+        description: |-
+          * `sick` - ลาป่วย
+          * `personal` - ลากิจส่วนตัว
+          * `other` - ลาอื่น ๆ
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: start_date__gte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: start_date__lte
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: status
+        schema:
+          type: string
+          title: สถานะคำร้อง
+          enum:
+          - approved
+          - cancelled
+          - draft
+          - pending_advisor_review
+          - pending_final_approval
+          - pending_program_head_review
+          - rejected
+          - returned
+          - submitted
+        description: |-
+          * `draft` - แบบร่าง
+          * `submitted` - ส่งคำร้องแล้ว
+          * `pending_advisor_review` - รอความเห็นอาจารย์ที่ปรึกษา
+          * `pending_program_head_review` - รอความเห็นหัวหน้าหน่วยหลักสูตร
+          * `pending_final_approval` - รอผู้มีอำนาจอนุมัติ
+          * `approved` - อนุญาต
+          * `rejected` - ไม่อนุญาต
+          * `returned` - ส่งกลับเพื่อแก้ไข
+          * `cancelled` - ยกเลิกคำร้อง
+      - in: query
+        name: student
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLeaveRequestList'
+          description: ''
+    post:
+      operationId: leave_requests_create
+      description: Students own their requests; admins may read all requests.
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/:
+    get:
+      operationId: leave_requests_retrieve
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+    put:
+      operationId: leave_requests_update
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+    patch:
+      operationId: leave_requests_partial_update
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/admin-override/:
+    post:
+      operationId: leave_requests_admin_override_create
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/attachments/:
+    get:
+      operationId: leave_requests_attachments_retrieve
+      description: List (owner/admin) or upload (owner, draft only) attachments.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+    post:
+      operationId: leave_requests_attachments_create
+      description: List (owner/admin) or upload (owner, draft only) attachments.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/attachments/{attachment_id}/:
+    delete:
+      operationId: leave_requests_attachments_destroy
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: attachment_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/leave-requests/{id}/attachments/{attachment_id}/download/:
+    get:
+      operationId: leave_requests_attachments_download_retrieve
+      description: |-
+        Authenticated download with the same role scoping as the request.
+
+        Students may download their own files, admins any file, and instructors
+        only files on submitted requests that include one of their courses.
+      parameters:
+      - in: path
+        name: attachment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/leave-requests/{id}/cancel/:
+    post:
+      operationId: leave_requests_cancel_create
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/history/:
+    get:
+      operationId: leave_requests_history_retrieve
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/print/:
+    get:
+      operationId: leave_requests_print_retrieve
+      description: |-
+        Read-only A4 document data for students, instructors, and admins.
+
+        Students may print only their own request, admins may print any request,
+        and instructors may print requests that include an offering they teach
+        (drafts stay hidden). An instructor's payload is scoped to their own
+        courses so other instructors' comments are never exposed.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/leave-requests/{id}/resubmit/:
+    post:
+      operationId: leave_requests_resubmit_create
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/{id}/submit/:
+    post:
+      operationId: leave_requests_submit_create
+      description: Students own their requests; admins may read all requests.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave request.
+        required: true
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/available-courses/:
+    get:
+      operationId: leave_requests_available_courses_retrieve
+      description: Students own their requests; admins may read all requests.
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/history-summary/:
+    get:
+      operationId: leave_requests_history_summary_retrieve
+      description: |-
+        Live preview rows for the create/edit form (no saved request yet).
+
+        Student-only, scoped to their own profile. `start_date` doubles as the
+        academic-year reference; `exclude_id` drops the request being edited.
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+          description: ''
+  /api/v1/leave-requests/policy/:
+    get:
+      operationId: leave_requests_policy_retrieve
+      description: Current submission policy, so the SPA never hardcodes college rules.
+      tags:
+      - leave-requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/leave-role-assignments/:
+    get:
+      operationId: leave_role_assignments_list
+      description: Admin-only workflow role assignments (Phase 2).
+      parameters:
+      - in: query
+        name: academic_term
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: class_group
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: program
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: role_type
+        schema:
+          type: string
+          title: บทบาทใน Workflow
+          enum:
+          - advisor
+          - final_approver
+          - program_head
+        description: |-
+          * `advisor` - อาจารย์ที่ปรึกษา
+          * `program_head` - หัวหน้าหน่วยหลักสูตร
+          * `final_approver` - ผู้มีอำนาจอนุมัติ
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - leave-role-assignments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLeaveRoleAssignmentList'
+          description: ''
+    post:
+      operationId: leave_role_assignments_create
+      description: Admin-only workflow role assignments (Phase 2).
+      tags:
+      - leave-role-assignments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRoleAssignment'
+          description: ''
+  /api/v1/leave-role-assignments/{id}/:
+    get:
+      operationId: leave_role_assignments_retrieve
+      description: Admin-only workflow role assignments (Phase 2).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave role assignment.
+        required: true
+      tags:
+      - leave-role-assignments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRoleAssignment'
+          description: ''
+    put:
+      operationId: leave_role_assignments_update
+      description: Admin-only workflow role assignments (Phase 2).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave role assignment.
+        required: true
+      tags:
+      - leave-role-assignments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LeaveRoleAssignmentRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRoleAssignment'
+          description: ''
+    patch:
+      operationId: leave_role_assignments_partial_update
+      description: Admin-only workflow role assignments (Phase 2).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave role assignment.
+        required: true
+      tags:
+      - leave-role-assignments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveRoleAssignmentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveRoleAssignmentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveRoleAssignmentRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRoleAssignment'
+          description: ''
+    delete:
+      operationId: leave_role_assignments_destroy
+      description: Admin-only workflow role assignments (Phase 2).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave role assignment.
+        required: true
+      tags:
+      - leave-role-assignments
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/leave-workflow-configs/:
+    get:
+      operationId: leave_workflow_configs_list
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      parameters:
+      - in: query
+        name: academic_term
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: class_group
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: program
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - leave-workflow-configs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLeaveWorkflowConfigList'
+          description: ''
+    post:
+      operationId: leave_workflow_configs_create
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      tags:
+      - leave-workflow-configs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveWorkflowConfig'
+          description: ''
+  /api/v1/leave-workflow-configs/{id}/:
+    get:
+      operationId: leave_workflow_configs_retrieve
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave workflow config.
+        required: true
+      tags:
+      - leave-workflow-configs
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveWorkflowConfig'
+          description: ''
+    put:
+      operationId: leave_workflow_configs_update
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave workflow config.
+        required: true
+      tags:
+      - leave-workflow-configs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LeaveWorkflowConfigRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveWorkflowConfig'
+          description: ''
+    patch:
+      operationId: leave_workflow_configs_partial_update
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave workflow config.
+        required: true
+      tags:
+      - leave-workflow-configs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveWorkflowConfigRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveWorkflowConfigRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedLeaveWorkflowConfigRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveWorkflowConfig'
+          description: ''
+    delete:
+      operationId: leave_workflow_configs_destroy
+      description: |-
+        Admin-only configurable approval order (2–3 steps).
+
+        The most specific active scope wins at submission time:
+        class group + term > class group > programme + term > programme > global.
+        With no active row the default three-step workflow is used.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this leave workflow config.
+        required: true
+      tags:
+      - leave-workflow-configs
       security:
       - jwtAuth: []
       responses:
@@ -2328,6 +3838,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       parameters:
       - in: query
         name: academic_year_level
@@ -2373,13 +3887,15 @@ paths:
           type: string
           title: สถานะ
           enum:
-          - active
-          - inactive
-          - suspended
+          - graduated
+          - leave_of_absence
+          - studying
+          - withdrawn
         description: |-
-          * `active` - ใช้งานอยู่
-          * `suspended` - ระงับการใช้งาน
-          * `inactive` - ไม่ใช้งาน
+          * `studying` - กำลังศึกษา
+          * `graduated` - สำเร็จการศึกษา
+          * `withdrawn` - ลาออก
+          * `leave_of_absence` - พักการเรียน
       tags:
       - students
       security:
@@ -2396,6 +3912,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       tags:
       - students
       requestBody:
@@ -2425,6 +3945,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       parameters:
       - in: path
         name: id
@@ -2449,6 +3973,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       parameters:
       - in: path
         name: id
@@ -2485,6 +4013,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       parameters:
       - in: path
         name: id
@@ -2520,6 +4052,10 @@ paths:
       description: |-
         Students list (+admin CRUD). Backend has all data; students scope
         their own data — never exposing cross-student info.
+
+        Instructors may READ students they plausibly teach (those in the class
+        groups of their offerings, or enrolled in their offerings) for the
+        enrollment/students pickers; every mutating action stays admin-only.
       parameters:
       - in: path
         name: id
@@ -2541,6 +4077,60 @@ paths:
       description: |-
         Bulk student import from CSV (admin). Validates headers/values,
         creates account + profile atomically per row, reports row errors.
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+  /api/v1/students/promote-group/:
+    post:
+      operationId: students_promote_group_create
+      description: Promote every student in matching class groups (+ the groups themselves).
+      tags:
+      - students
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StudentProfileRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+          description: ''
+  /api/v1/students/promote-selected/:
+    post:
+      operationId: students_promote_selected_create
+      description: Promote the chosen students only; class groups stay untouched.
       tags:
       - students
       requestBody:
@@ -2865,9 +4455,8 @@ components:
           readOnly: true
         academic_year:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           title: ปีการศึกษา (พ.ศ.)
           description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
         semester:
@@ -2915,9 +4504,8 @@ components:
       properties:
         academic_year:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           title: ปีการศึกษา (พ.ศ.)
           description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
         semester:
@@ -2945,6 +4533,14 @@ components:
       - end_date
       - semester
       - start_date
+    AttachmentTypeEnum:
+      enum:
+      - medical_certificate
+      - other
+      type: string
+      description: |-
+        * `medical_certificate` - ใบรับรองแพทย์
+        * `other` - เอกสารประกอบอื่น
     AttendanceRecord:
       type: object
       properties:
@@ -2995,6 +4591,26 @@ components:
         method_display:
           type: string
           readOnly: true
+        latitude:
+          type: number
+          format: double
+          readOnly: true
+        longitude:
+          type: number
+          format: double
+          readOnly: true
+        location_accuracy_m:
+          type: number
+          format: double
+          readOnly: true
+        location_status:
+          title: สถานะการขอพิกัด
+          oneOf:
+          - $ref: '#/components/schemas/AttendanceRecordLocationStatusEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        client_ip:
+          type: string
+          readOnly: true
         edited_by_username:
           type: string
           readOnly: true
@@ -3013,10 +4629,14 @@ components:
       - attendance_session
       - check_in_method
       - checked_in_at
+      - client_ip
       - course_code
       - created_at
       - edited_by_username
       - id
+      - latitude
+      - location_accuracy_m
+      - longitude
       - method_display
       - session_date
       - status_display
@@ -3024,6 +4644,18 @@ components:
       - student_code
       - student_name
       - updated_at
+    AttendanceRecordLocationStatusEnum:
+      enum:
+      - granted
+      - denied
+      - unavailable
+      - unsupported
+      type: string
+      description: |-
+        * `granted` - บันทึกพิกัด
+        * `denied` - ผู้ใช้ไม่อนุญาต
+        * `unavailable` - หาตำแหน่งไม่ได้
+        * `unsupported` - อุปกรณ์ไม่รองรับ
     AttendanceRecordUpdate:
       type: object
       description: Instructor/admin edit of status with mandatory reason (audited).
@@ -3087,11 +4719,14 @@ components:
           type: string
           format: date-time
           title: เวลาปิดรับเช็คชื่อ
+        check_in_effective_end:
+          type: string
+          format: date-time
+          readOnly: true
         late_threshold_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: เกณฑ์นับมาสาย (นาที)
         status:
           allOf:
@@ -3122,6 +4757,7 @@ components:
           nullable: true
           title: เวลาปิดคาบ
       required:
+      - check_in_effective_end
       - check_in_end
       - check_in_start
       - checked_in_count
@@ -3170,9 +4806,8 @@ components:
           title: เวลาปิดรับเช็คชื่อ
         late_threshold_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: เกณฑ์นับมาสาย (นาที)
       required:
       - check_in_end
@@ -3207,9 +4842,8 @@ components:
           title: เวลาปิดรับเช็คชื่อ
         late_threshold_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: เกณฑ์นับมาสาย (นาที)
       required:
       - check_in_end
@@ -3242,9 +4876,8 @@ components:
           title: เวลาปิดรับเช็คชื่อ
         late_threshold_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: เกณฑ์นับมาสาย (นาที)
       required:
       - check_in_end
@@ -3320,6 +4953,19 @@ components:
       - resource_id
       - resource_type
       - user_agent
+    BlankEnum:
+      enum:
+      - ''
+    CheckInLocationStatusEnum:
+      enum:
+      - denied
+      - unavailable
+      - unsupported
+      type: string
+      description: |-
+        * `denied` - denied
+        * `unavailable` - unavailable
+        * `unsupported` - unsupported
     CheckInMethodEnum:
       enum:
       - qr
@@ -3331,15 +4977,32 @@ components:
     CheckInRequest:
       type: object
       description: |-
-        Body for POST /attendance/check-in/ — only the scanned token; nothing
-        else trusted from the client (spec §10.2: session id/status are not taken
-        from client).
+        Body for POST /attendance/check-in/ — the scanned token plus OPTIONAL
+        device location. Session identity is derived server-side (§10.2). The
+        location is evidence only (fail-open): omitting it never blocks a check-in
+        and out-of-range values simply fail normal payload validation (400).
       properties:
         token:
           type: string
           writeOnly: true
           minLength: 1
           maxLength: 256
+        latitude:
+          type: number
+          format: double
+          maximum: 90
+          minimum: -90
+        longitude:
+          type: number
+          format: double
+          maximum: 180
+          minimum: -180
+        accuracy:
+          type: number
+          format: double
+          minimum: 0
+        location_status:
+          $ref: '#/components/schemas/CheckInLocationStatusEnum'
       required:
       - token
     CheckInResult:
@@ -3390,9 +5053,8 @@ components:
           readOnly: true
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
         created_at:
           type: string
@@ -3429,9 +5091,8 @@ components:
           title: หลักสูตร
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
       required:
       - group_code
@@ -3462,7 +5123,7 @@ components:
           - $ref: '#/components/schemas/WeekdayEnum'
           title: วันเรียนวันที่
           minimum: 0
-          maximum: 9223372036854775807
+          maximum: 32767
         weekday_display:
           type: string
           readOnly: true
@@ -3514,7 +5175,7 @@ components:
           - $ref: '#/components/schemas/WeekdayEnum'
           title: วันเรียนวันที่
           minimum: 0
-          maximum: 9223372036854775807
+          maximum: 32767
         start_time:
           type: string
           format: time
@@ -3613,9 +5274,22 @@ components:
         instructor:
           type: string
           format: uuid
+          readOnly: true
           nullable: true
-          title: อาจารย์ผู้รับผิดชอบ
+          title: อาจารย์หลัก
+          description: อาจารย์ผู้รับผิดชอบหลัก (ตั้งอัตโนมัติจากคนแรกในรายการ instructors)
         instructor_name:
+          type: string
+          readOnly: true
+        instructors:
+          type: array
+          items:
+            type: string
+            format: uuid
+        instructor_ids:
+          type: string
+          readOnly: true
+        instructor_names:
           type: string
           readOnly: true
         class_group:
@@ -3646,7 +5320,10 @@ components:
       - created_at
       - enrollment_count
       - id
+      - instructor
+      - instructor_ids
       - instructor_name
+      - instructor_names
       - term_label
       - updated_at
     CourseOfferingRequest:
@@ -3660,11 +5337,11 @@ components:
           type: string
           format: uuid
           title: ภาคการศึกษา
-        instructor:
-          type: string
-          format: uuid
-          nullable: true
-          title: อาจารย์ผู้รับผิดชอบ
+        instructors:
+          type: array
+          items:
+            type: string
+            format: uuid
         class_group:
           type: string
           format: uuid
@@ -3770,7 +5447,11 @@ components:
           type: string
           format: date-time
           readOnly: true
+        attendance_record_count:
+          type: string
+          readOnly: true
       required:
+      - attendance_record_count
       - course_code
       - course_name
       - course_offering
@@ -3852,11 +5533,11 @@ components:
           maxLength: 100
         department:
           type: string
-          title: ภาควิชา/สาขา
-          maxLength: 150
+          title: หลักสูตร/สาขา
+          maxLength: 200
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/InstructorProfileStatusEnum'
           title: สถานะ
         created_at:
           type: string
@@ -3896,16 +5577,1005 @@ components:
           maxLength: 100
         department:
           type: string
-          title: ภาควิชา/สาขา
-          maxLength: 150
+          title: หลักสูตร/สาขา
+          maxLength: 200
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/InstructorProfileStatusEnum'
           title: สถานะ
       required:
       - employee_code
       - first_name
       - last_name
+    InstructorProfileStatusEnum:
+      enum:
+      - active
+      - suspended
+      - inactive
+      type: string
+      description: |-
+        * `active` - ใช้งานอยู่
+        * `suspended` - ระงับการใช้งาน
+        * `inactive` - ไม่ใช้งาน
+    LeaveAttachment:
+      type: object
+      description: Read-only attachment metadata. The file itself is never exposed.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        attachment_type:
+          allOf:
+          - $ref: '#/components/schemas/AttachmentTypeEnum'
+          readOnly: true
+          title: ประเภทไฟล์แนบ
+        attachment_type_display:
+          type: string
+          readOnly: true
+        original_name:
+          type: string
+          readOnly: true
+          title: ชื่อไฟล์เดิม
+        content_type:
+          type: string
+          readOnly: true
+          title: ชนิดไฟล์
+        size:
+          type: integer
+          readOnly: true
+          title: ขนาดไฟล์ (bytes)
+        uploaded_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้อัปโหลด
+        uploaded_by_name:
+          type: string
+          readOnly: true
+        download_url:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - attachment_type
+      - attachment_type_display
+      - content_type
+      - created_at
+      - download_url
+      - id
+      - original_name
+      - size
+      - uploaded_by
+      - uploaded_by_name
+    LeaveCourse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          readOnly: true
+          title: รายวิชาที่เปิดสอน
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        term_label:
+          type: string
+          readOnly: true
+        class_group_name:
+          type: string
+          readOnly: true
+        schedules:
+          type: string
+          readOnly: true
+        affected_start_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่เริ่มได้รับผลกระทบ
+        affected_end_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่สิ้นสุดได้รับผลกระทบ
+        affected_start_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาเริ่มได้รับผลกระทบ
+        affected_end_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาสิ้นสุดได้รับผลกระทบ
+        review_status:
+          allOf:
+          - $ref: '#/components/schemas/ReviewStatusBedEnum'
+          readOnly: true
+          title: สถานะการพิจารณารายวิชา
+        review_status_display:
+          type: string
+          readOnly: true
+        reviewed_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้พิจารณาล่าสุด
+        reviewed_by_name:
+          type: string
+          readOnly: true
+        reviewed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: พิจารณาล่าสุดเมื่อ
+        reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveCourseReview'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - affected_end_date
+      - affected_end_time
+      - affected_start_date
+      - affected_start_time
+      - class_group_name
+      - course_code
+      - course_name
+      - course_offering
+      - created_at
+      - id
+      - review_status
+      - review_status_display
+      - reviewed_at
+      - reviewed_by
+      - reviewed_by_name
+      - reviews
+      - schedules
+      - term_label
+      - updated_at
+    LeaveCourseInbox:
+      type: object
+      description: Instructor's course-scoped view of a leave request.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        leave_request_id:
+          type: string
+          format: uuid
+          readOnly: true
+        request_status:
+          type: string
+          readOnly: true
+        request_status_display:
+          type: string
+          readOnly: true
+        student_code:
+          type: string
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        leave_type:
+          type: string
+          readOnly: true
+        leave_type_display:
+          type: string
+          readOnly: true
+        start_date:
+          type: string
+          format: date
+          readOnly: true
+        end_date:
+          type: string
+          format: date
+          readOnly: true
+        start_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+        end_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+        reason:
+          type: string
+          readOnly: true
+        late_submission_reason:
+          type: string
+          readOnly: true
+        submitted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveAttachment'
+          readOnly: true
+        requires_medical_certificate:
+          type: string
+          readOnly: true
+        medical_certificate_attached:
+          type: string
+          readOnly: true
+        course_offering:
+          type: string
+          format: uuid
+          readOnly: true
+          title: รายวิชาที่เปิดสอน
+        course_code:
+          type: string
+          readOnly: true
+        course_name:
+          type: string
+          readOnly: true
+        term_label:
+          type: string
+          readOnly: true
+        class_group_name:
+          type: string
+          readOnly: true
+        affected_start_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่เริ่มได้รับผลกระทบ
+        affected_end_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่สิ้นสุดได้รับผลกระทบ
+        affected_start_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาเริ่มได้รับผลกระทบ
+        affected_end_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาสิ้นสุดได้รับผลกระทบ
+        review_status:
+          allOf:
+          - $ref: '#/components/schemas/ReviewStatusBedEnum'
+          readOnly: true
+          title: สถานะการพิจารณารายวิชา
+        review_status_display:
+          type: string
+          readOnly: true
+        reviewed_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้พิจารณาล่าสุด
+        reviewed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: พิจารณาล่าสุดเมื่อ
+        reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveCourseReview'
+          readOnly: true
+        is_reviewable:
+          type: string
+          readOnly: true
+        leave_history:
+          type: string
+          readOnly: true
+      required:
+      - affected_end_date
+      - affected_end_time
+      - affected_start_date
+      - affected_start_time
+      - attachments
+      - class_group_name
+      - course_code
+      - course_name
+      - course_offering
+      - end_date
+      - end_time
+      - id
+      - is_reviewable
+      - late_submission_reason
+      - leave_history
+      - leave_request_id
+      - leave_type
+      - leave_type_display
+      - medical_certificate_attached
+      - reason
+      - request_status
+      - request_status_display
+      - requires_medical_certificate
+      - review_status
+      - review_status_display
+      - reviewed_at
+      - reviewed_by
+      - reviews
+      - start_date
+      - start_time
+      - student_code
+      - student_name
+      - submitted_at
+      - term_label
+    LeaveCourseReview:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        review_status:
+          allOf:
+          - $ref: '#/components/schemas/LeaveCourseReviewReviewStatusEnum'
+          readOnly: true
+          title: ผลการพิจารณา
+        review_status_display:
+          type: string
+          readOnly: true
+        comment:
+          type: string
+          readOnly: true
+          title: ความคิดเห็น
+        reviewer:
+          type: string
+          format: uuid
+          readOnly: true
+          title: ผู้พิจารณา
+        reviewer_username:
+          type: string
+          readOnly: true
+        reviewer_name:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - comment
+      - created_at
+      - id
+      - review_status
+      - review_status_display
+      - reviewer
+      - reviewer_name
+      - reviewer_username
+    LeaveCourseReviewReviewStatusEnum:
+      enum:
+      - reviewed
+      - acknowledged
+      - rejected
+      type: string
+      description: |-
+        * `reviewed` - ให้ความเห็นแล้ว
+        * `acknowledged` - รับทราบ
+        * `rejected` - ไม่เห็นด้วย
+    LeaveRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        student:
+          type: string
+          format: uuid
+          readOnly: true
+          title: นักศึกษา
+        student_code:
+          type: string
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        student_program_name:
+          type: string
+          readOnly: true
+        student_class_group_name:
+          type: string
+          readOnly: true
+        student_year_level:
+          type: integer
+          readOnly: true
+        leave_type:
+          allOf:
+          - $ref: '#/components/schemas/LeaveTypeEnum'
+          readOnly: true
+          title: ประเภทการลา
+        leave_type_display:
+          type: string
+          readOnly: true
+        start_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่เริ่มลา
+        end_date:
+          type: string
+          format: date
+          readOnly: true
+          title: วันที่สิ้นสุดการลา
+        start_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาเริ่มลา (ถ้าระบุ)
+          description: ไม่ระบุ = ลาทั้งวัน
+        end_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+          title: เวลาสิ้นสุดการลา (ถ้าระบุ)
+          description: ต้องระบุคู่กับเวลาเริ่มลา
+        total_days:
+          type: integer
+          readOnly: true
+        reason:
+          type: string
+          readOnly: true
+          title: เหตุผลการลา
+        late_submission_reason:
+          type: string
+          readOnly: true
+          title: เหตุผลการส่งย้อนหลัง
+          description: ใช้เมื่อลาป่วยและส่งหลังกำหนด แต่ยังอยู่ภายในระยะผ่อนผัน
+        contact_phone:
+          type: string
+          readOnly: true
+          title: โทรศัพท์ที่ติดต่อได้ระหว่างลา
+        line_id:
+          type: string
+          readOnly: true
+        address_during_leave:
+          type: string
+          readOnly: true
+          title: ที่อยู่ระหว่างการลา
+        guardian_acknowledged:
+          type: boolean
+          readOnly: true
+          title: ผู้ปกครองรับทราบการลาแล้ว
+        guardian_phone:
+          type: string
+          readOnly: true
+          title: โทรศัพท์ผู้ปกครอง
+        guardian_address:
+          type: string
+          readOnly: true
+          title: ที่อยู่ผู้ปกครอง
+        status:
+          allOf:
+          - $ref: '#/components/schemas/LeaveStatusEnum'
+          readOnly: true
+          title: สถานะคำร้อง
+        status_display:
+          type: string
+          readOnly: true
+        submitted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: ส่งคำร้องเมื่อ
+        cancelled_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: ยกเลิกเมื่อ
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveAttachment'
+          readOnly: true
+        requires_medical_certificate:
+          type: string
+          readOnly: true
+        medical_certificate_attached:
+          type: string
+          readOnly: true
+        submission_deadline:
+          type: string
+          readOnly: true
+        submission_grace_deadline:
+          type: string
+          readOnly: true
+        course_count:
+          type: integer
+          readOnly: true
+        courses:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveCourse'
+          readOnly: true
+        is_editable:
+          type: boolean
+          readOnly: true
+        is_cancellable:
+          type: boolean
+          readOnly: true
+        workflow_steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveWorkflowStep'
+          readOnly: true
+        workflow_history:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveWorkflowHistory'
+          readOnly: true
+        current_step:
+          type: string
+          readOnly: true
+        available_actions:
+          type: string
+          readOnly: true
+        leave_history:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - address_during_leave
+      - attachments
+      - available_actions
+      - cancelled_at
+      - contact_phone
+      - course_count
+      - courses
+      - created_at
+      - current_step
+      - end_date
+      - end_time
+      - guardian_acknowledged
+      - guardian_address
+      - guardian_phone
+      - id
+      - is_cancellable
+      - is_editable
+      - late_submission_reason
+      - leave_history
+      - leave_type
+      - leave_type_display
+      - line_id
+      - medical_certificate_attached
+      - reason
+      - requires_medical_certificate
+      - start_date
+      - start_time
+      - status
+      - status_display
+      - student
+      - student_class_group_name
+      - student_code
+      - student_name
+      - student_program_name
+      - student_year_level
+      - submission_deadline
+      - submission_grace_deadline
+      - submitted_at
+      - total_days
+      - updated_at
+      - workflow_history
+      - workflow_steps
+    LeaveRoleAssignment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          title: ผู้รับผิดชอบ
+        user_username:
+          type: string
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        role_type:
+          allOf:
+          - $ref: '#/components/schemas/RoleTypeEnum'
+          title: บทบาทใน Workflow
+        role_type_display:
+          type: string
+          readOnly: true
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        program_name:
+          type: string
+          readOnly: true
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        class_group_name:
+          type: string
+          readOnly: true
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        term_label:
+          type: string
+          readOnly: true
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - class_group_name
+      - created_at
+      - id
+      - program_name
+      - role_type
+      - role_type_display
+      - term_label
+      - updated_at
+      - user
+      - user_name
+      - user_username
+    LeaveRoleAssignmentRequest:
+      type: object
+      properties:
+        user:
+          type: string
+          format: uuid
+          title: ผู้รับผิดชอบ
+        role_type:
+          allOf:
+          - $ref: '#/components/schemas/RoleTypeEnum'
+          title: บทบาทใน Workflow
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+      required:
+      - role_type
+      - user
+    LeaveStatusEnum:
+      enum:
+      - draft
+      - submitted
+      - pending_advisor_review
+      - pending_program_head_review
+      - pending_final_approval
+      - approved
+      - rejected
+      - returned
+      - cancelled
+      type: string
+      description: |-
+        * `draft` - แบบร่าง
+        * `submitted` - ส่งคำร้องแล้ว
+        * `pending_advisor_review` - รอความเห็นอาจารย์ที่ปรึกษา
+        * `pending_program_head_review` - รอความเห็นหัวหน้าหน่วยหลักสูตร
+        * `pending_final_approval` - รอผู้มีอำนาจอนุมัติ
+        * `approved` - อนุญาต
+        * `rejected` - ไม่อนุญาต
+        * `returned` - ส่งกลับเพื่อแก้ไข
+        * `cancelled` - ยกเลิกคำร้อง
+    LeaveTypeEnum:
+      enum:
+      - sick
+      - personal
+      - other
+      type: string
+      description: |-
+        * `sick` - ลาป่วย
+        * `personal` - ลากิจส่วนตัว
+        * `other` - ลาอื่น ๆ
+    LeaveWorkflowConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          title: ชื่อชุดขั้นตอน
+          maxLength: 120
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        program_name:
+          type: string
+          readOnly: true
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        class_group_name:
+          type: string
+          readOnly: true
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        term_label:
+          type: string
+          readOnly: true
+        steps:
+          title: ลำดับขั้นตอน
+        steps_display:
+          type: string
+          readOnly: true
+        step_count:
+          type: string
+          readOnly: true
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - class_group_name
+      - created_at
+      - id
+      - program_name
+      - step_count
+      - steps_display
+      - term_label
+      - updated_at
+    LeaveWorkflowConfigRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          title: ชื่อชุดขั้นตอน
+          maxLength: 120
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        steps:
+          title: ลำดับขั้นตอน
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+    LeaveWorkflowHistory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        step_order:
+          type: integer
+          readOnly: true
+          nullable: true
+          title: ลำดับขั้นตอน
+        role_type:
+          type: string
+          readOnly: true
+          title: บทบาทใน Workflow
+        role_type_display:
+          type: string
+          readOnly: true
+        action:
+          type: string
+          readOnly: true
+          title: การดำเนินการ
+        action_display:
+          type: string
+          readOnly: true
+        from_status:
+          type: string
+          readOnly: true
+          title: สถานะก่อนดำเนินการ
+        to_status:
+          type: string
+          readOnly: true
+          title: สถานะหลังดำเนินการ
+        actor:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้ดำเนินการ
+        actor_name:
+          type: string
+          readOnly: true
+        comment:
+          type: string
+          readOnly: true
+          title: ความเห็น/เหตุผล
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - action
+      - action_display
+      - actor
+      - actor_name
+      - comment
+      - created_at
+      - from_status
+      - id
+      - role_type
+      - role_type_display
+      - step_order
+      - to_status
+    LeaveWorkflowStep:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        step_order:
+          type: integer
+          readOnly: true
+          title: ลำดับขั้นตอน
+        role_type:
+          allOf:
+          - $ref: '#/components/schemas/RoleTypeEnum'
+          readOnly: true
+          title: บทบาทใน Workflow
+        role_type_display:
+          type: string
+          readOnly: true
+        assignee:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้รับผิดชอบ
+        assignee_name:
+          type: string
+          readOnly: true
+        assignee_username:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/LeaveWorkflowStepStatusEnum'
+          readOnly: true
+          title: สถานะขั้นตอน
+        status_display:
+          type: string
+          readOnly: true
+        acted_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          title: ผู้ดำเนินการ
+        acted_by_name:
+          type: string
+          readOnly: true
+        acted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          title: ดำเนินการเมื่อ
+        comment:
+          type: string
+          readOnly: true
+          title: ความเห็น/เหตุผล
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - acted_at
+      - acted_by
+      - acted_by_name
+      - assignee
+      - assignee_name
+      - assignee_username
+      - comment
+      - created_at
+      - id
+      - role_type
+      - role_type_display
+      - status
+      - status_display
+      - step_order
+    LeaveWorkflowStepStatusEnum:
+      enum:
+      - pending
+      - completed
+      - skipped
+      type: string
+      description: |-
+        * `pending` - รอดำเนินการ
+        * `completed` - ดำเนินการแล้ว
+        * `skipped` - ข้ามขั้นตอน
     LogoutRequestRequest:
       type: object
       properties:
@@ -4190,6 +6860,98 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InstructorProfile'
+    PaginatedLeaveCourseInboxList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveCourseInbox'
+    PaginatedLeaveRequestList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveRequest'
+    PaginatedLeaveRoleAssignmentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveRoleAssignment'
+    PaginatedLeaveWorkflowConfigList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaveWorkflowConfig'
     PaginatedProgramList:
       type: object
       required:
@@ -4213,6 +6975,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Program'
+    PaginatedSessionRosterList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionRoster'
     PaginatedStudentProfileList:
       type: object
       required:
@@ -4264,9 +7049,8 @@ components:
       properties:
         academic_year:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 2147483647
           minimum: 0
-          format: int64
           title: ปีการศึกษา (พ.ศ.)
           description: ปีการศึกษาไทย พ.ศ. เช่น 2569 — เก็บตามที่ป้อน ไม่แปลงอัตโนมัติ
         semester:
@@ -4326,9 +7110,8 @@ components:
           title: เวลาปิดรับเช็คชื่อ
         late_threshold_minutes:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: เกณฑ์นับมาสาย (นาที)
     PatchedClassGroupRequest:
       type: object
@@ -4349,9 +7132,8 @@ components:
           title: หลักสูตร
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
     PatchedClassScheduleRequest:
       type: object
@@ -4365,7 +7147,7 @@ components:
           - $ref: '#/components/schemas/WeekdayEnum'
           title: วันเรียนวันที่
           minimum: 0
-          maximum: 9223372036854775807
+          maximum: 32767
         start_time:
           type: string
           format: time
@@ -4393,11 +7175,11 @@ components:
           type: string
           format: uuid
           title: ภาคการศึกษา
-        instructor:
-          type: string
-          format: uuid
-          nullable: true
-          title: อาจารย์ผู้รับผิดชอบ
+        instructors:
+          type: array
+          items:
+            type: string
+            format: uuid
         class_group:
           type: string
           format: uuid
@@ -4466,12 +7248,68 @@ components:
           maxLength: 100
         department:
           type: string
-          title: ภาควิชา/สาขา
-          maxLength: 150
+          title: หลักสูตร/สาขา
+          maxLength: 200
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/InstructorProfileStatusEnum'
           title: สถานะ
+    PatchedLeaveRoleAssignmentRequest:
+      type: object
+      properties:
+        user:
+          type: string
+          format: uuid
+          title: ผู้รับผิดชอบ
+        role_type:
+          allOf:
+          - $ref: '#/components/schemas/RoleTypeEnum'
+          title: บทบาทใน Workflow
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
+    PatchedLeaveWorkflowConfigRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          title: ชื่อชุดขั้นตอน
+          maxLength: 120
+        program:
+          type: string
+          format: uuid
+          nullable: true
+          title: หลักสูตร
+        class_group:
+          type: string
+          format: uuid
+          nullable: true
+          title: กลุ่มเรียน
+        academic_term:
+          type: string
+          format: uuid
+          nullable: true
+          title: ภาคการศึกษา
+        steps:
+          title: ลำดับขั้นตอน
+        is_active:
+          type: boolean
+          title: เปิดใช้งาน
     PatchedProgramRequest:
       type: object
       properties:
@@ -4517,9 +7355,8 @@ components:
           title: หลักสูตร
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
         class_group:
           type: string
@@ -4528,7 +7365,7 @@ components:
           title: กลุ่มเรียน
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/Status662Enum'
           title: สถานะ
     PatchedUserRequest:
       type: object
@@ -4628,6 +7465,18 @@ components:
           type: string
       required:
       - access
+    ReviewStatusBedEnum:
+      enum:
+      - pending
+      - reviewed
+      - acknowledged
+      - rejected
+      type: string
+      description: |-
+        * `pending` - รอการพิจารณา
+        * `reviewed` - ให้ความเห็นแล้ว
+        * `acknowledged` - รับทราบ
+        * `rejected` - ไม่เห็นด้วย
     RoleEnum:
       enum:
       - admin
@@ -4638,6 +7487,16 @@ components:
         * `admin` - ผู้ดูแลระบบ
         * `instructor` - อาจารย์ผู้สอน
         * `student` - นักศึกษา
+    RoleTypeEnum:
+      enum:
+      - advisor
+      - program_head
+      - final_approver
+      type: string
+      description: |-
+        * `advisor` - อาจารย์ที่ปรึกษา
+        * `program_head` - หัวหน้าหน่วยหลักสูตร
+        * `final_approver` - ผู้มีอำนาจอนุมัติ
     SAMSLoginRequest:
       type: object
       description: Login that also carries SAMS role/profile claims for the front-end.
@@ -4663,6 +7522,86 @@ components:
         * `1` - ภาคเรียนที่ 1
         * `2` - ภาคเรียนที่ 2
         * `3` - ภาคเรียนฤดูร้อน
+    SessionRoster:
+      type: object
+      description: Per-session roster rows (enrolled student + their check-in state).
+      properties:
+        id:
+          type: string
+          readOnly: true
+        student_code:
+          type: string
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        checked_in_status:
+          type: string
+          readOnly: true
+          nullable: true
+        checked_in_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        record_id:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_status:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_status_display:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_type:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_type_display:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_request_id:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_course_id:
+          type: string
+          readOnly: true
+          nullable: true
+        leave_request_count:
+          type: integer
+          readOnly: true
+          nullable: true
+      required:
+      - checked_in_at
+      - checked_in_status
+      - id
+      - leave_course_id
+      - leave_request_count
+      - leave_request_id
+      - leave_status
+      - leave_status_display
+      - leave_type
+      - leave_type_display
+      - record_id
+      - student_code
+      - student_name
+    Status662Enum:
+      enum:
+      - studying
+      - graduated
+      - withdrawn
+      - leave_of_absence
+      type: string
+      description: |-
+        * `studying` - กำลังศึกษา
+        * `graduated` - สำเร็จการศึกษา
+        * `withdrawn` - ลาออก
+        * `leave_of_absence` - พักการเรียน
     StatusC17Enum:
       enum:
       - present
@@ -4675,16 +7614,6 @@ components:
         * `late` - มาสาย
         * `absent` - ขาดเรียน
         * `excused` - ลา/ได้รับอนุญาต
-    StatusF4fEnum:
-      enum:
-      - active
-      - suspended
-      - inactive
-      type: string
-      description: |-
-        * `active` - ใช้งานอยู่
-        * `suspended` - ระงับการใช้งาน
-        * `inactive` - ไม่ใช้งาน
     StudentCreate:
       type: object
       description: Admin creates user account + student profile in one request.
@@ -4718,7 +7647,7 @@ components:
           nullable: true
         academic_year_level:
           type: integer
-          maximum: 8
+          maximum: 4
           minimum: 1
           default: 1
         class_group:
@@ -4727,7 +7656,7 @@ components:
           nullable: true
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/Status662Enum'
           title: สถานะ
       required:
       - first_name
@@ -4772,7 +7701,7 @@ components:
           nullable: true
         academic_year_level:
           type: integer
-          maximum: 8
+          maximum: 4
           minimum: 1
           default: 1
         class_group:
@@ -4781,7 +7710,7 @@ components:
           nullable: true
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/Status662Enum'
           title: สถานะ
       required:
       - first_name
@@ -4832,9 +7761,8 @@ components:
           readOnly: true
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
         class_group:
           type: string
@@ -4846,7 +7774,7 @@ components:
           readOnly: true
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/Status662Enum'
           title: สถานะ
         created_at:
           type: string
@@ -4894,9 +7822,8 @@ components:
           title: หลักสูตร
         academic_year_level:
           type: integer
-          maximum: 9223372036854775807
+          maximum: 32767
           minimum: 0
-          format: int64
           title: ชั้นปี
         class_group:
           type: string
@@ -4905,7 +7832,7 @@ components:
           title: กลุ่มเรียน
         status:
           allOf:
-          - $ref: '#/components/schemas/StatusF4fEnum'
+          - $ref: '#/components/schemas/Status662Enum'
           title: สถานะ
       required:
       - first_name
@@ -4940,6 +7867,9 @@ components:
         is_active:
           type: boolean
           title: เปิดใช้งาน
+        display_name:
+          type: string
+          readOnly: true
         date_joined:
           type: string
           format: date-time
@@ -4961,6 +7891,7 @@ components:
       required:
       - created_at
       - date_joined
+      - display_name
       - id
       - role
       - student_code

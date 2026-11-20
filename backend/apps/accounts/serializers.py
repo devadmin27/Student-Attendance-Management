@@ -7,7 +7,13 @@ from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.accounts.models import StudentProfile, User, InstructorProfile
+from apps.accounts.auth_policy import AccountStatusBlocked, blocked_login_message
+from apps.accounts.models import (
+    MAX_ACADEMIC_YEAR_LEVEL,
+    InstructorProfile,
+    StudentProfile,
+    User,
+)
 
 
 THAI_ROLE_LABELS = dict(User._meta.get_field("role").choices)
@@ -106,6 +112,13 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("สถานะไม่ถูกต้อง")
         return value
 
+    def validate_academic_year_level(self, value):
+        if not 1 <= value <= MAX_ACADEMIC_YEAR_LEVEL:
+            raise serializers.ValidationError(
+                f"ชั้นปีต้องอยู่ระหว่าง 1–{MAX_ACADEMIC_YEAR_LEVEL}"
+            )
+        return value
+
 
 class InstructorProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="user.username", read_only=True)
@@ -149,7 +162,9 @@ class StudentCreateSerializer(serializers.ModelSerializer):
     program = DynamicQuerysetField(
         model_name="program", allow_null=True, required=False
     )
-    academic_year_level = serializers.IntegerField(min_value=1, max_value=8, default=1)
+    academic_year_level = serializers.IntegerField(
+        min_value=1, max_value=MAX_ACADEMIC_YEAR_LEVEL, default=1
+    )
     class_group = DynamicQuerysetField(
         model_name="class_group", allow_null=True, required=False
     )
@@ -209,6 +224,9 @@ class SAMSLoginSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user
+        message = blocked_login_message(user)
+        if message:
+            raise AccountStatusBlocked(message)
         profile = None
         student = getattr(user, "student_profile", None)
         instructor = getattr(user, "instructor_profile", None)

@@ -256,7 +256,7 @@ class CheckInTests(BaseSamsTest):
         profile.student_code = "640009"
         profile.first_name = "ไม่ได้ลง"
         profile.last_name = "บทเรียน"
-        profile.status = "active"
+        profile.status = "studying"
         profile.save()
         self.auth_user(outsider, "Str0ngStud!Pass")
         raw = self.issue_token()
@@ -270,13 +270,26 @@ class CheckInTests(BaseSamsTest):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_suspended_account_rejected(self):
-        self.student.status = "suspended"
+        self.student.status = "leave_of_absence"
         self.student.save()
         self.auth_user(self.student_user, "Str0ngStud!Pass")
         raw = self.issue_token()
         response = self.client.post("/api/v1/attendance/check-in/", {"token": raw})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(response.data["code"], "ACCOUNT_SUSPENDED")
+
+    def test_graduated_and_withdrawn_students_cannot_check_in(self):
+        # Sign in while still studying: final states cannot log in at all, so
+        # this covers an already-valid session whose status changed later.
+        self.auth_user(self.student_user, "Str0ngStud!Pass")
+        raw = self.issue_token()
+        for value in ("graduated", "withdrawn"):
+            with self.subTest(status=value):
+                self.student.status = value
+                self.student.save(update_fields=["status"])
+                response = self.client.post("/api/v1/attendance/check-in/", {"token": raw})
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "ACCOUNT_SUSPENDED")
 
     def test_duplicate_checkin_same_session_friendly_message(self):
         self.auth_user(self.student_user, "Str0ngStud!Pass")

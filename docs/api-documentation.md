@@ -30,6 +30,11 @@ Error response (ผ่าน `sams_exception_handler`):
 | POST | `auth/logout/` | user | ลบ cookie + blacklist | — |
 | GET | `auth/me/` | user | ข้อมูลผู้ใช้ + profile | ✅ ใช้ hydrate หลัง reload ผ่าน refresh ได้จริง |
 
+> **สถานะนักศึกษา → การเข้าสู่ระบบ:** `graduated` และ `withdrawn` ไม่สามารถ login หรือ refresh token ได้
+> (403 `ACCOUNT_STATUS_BLOCKED` พร้อมข้อความระบุเหตุผล; ตอบ refresh จะลบ cookie `sams_refresh` ด้วย)
+> ส่วน `leave_of_absence` ยังเข้าสู่ระบบได้ แต่เช็คชื่อไม่ได้
+> (403 `ACCOUNT_SUSPENDED` พร้อมข้อความตามสถานะ) — `user.is_active` ยังเป็นคนละเรื่องกับสถานะโปรไฟล์
+
 ## 2. Dashboard ✅ (ทดสอบทั้งสาม role)
 
 | Method | Path | Role | คำอธิบาย |
@@ -81,6 +86,38 @@ Error response (ผ่าน `sams_exception_handler`):
 |---|---|---|
 | POST | `users/import-students/` | **multipart/form-data field ชื่อ `file`** (ไม่ใช่ `csv_file`); sanitize `=HYPERLINK` ให้เป็น `'ฉ้อฉล(ถูกแก้)` ผ่าน smoke script จริง; throttle `5/hour` |
 
+## 6.1 สถานะนักศึกษาและการเลื่อนชั้น (year-level) ✅
+
+**สถานะ `StudentProfile.status`** (ASCII key / ป้ายภาษาไทย):
+
+| key | label | login | check-in | เลื่อนชั้น |
+|---|---|---|---|---|
+| `studying` | กำลังศึกษา | ✅ | ✅ | ✅ |
+| `graduated` | สำเร็จการศึกษา | ❌ | ❌ | ❌ |
+| `withdrawn` | ลาออก | ❌ | ❌ | ❌ |
+| `leave_of_absence` | พักการเรียน | ✅ | ❌ | ❌ |
+
+> สถานะของ `InstructorProfile` ยังเป็น `active`/`suspended`/`inactive` เหมือนเดิม (คนละ vocabulary)
+
+ชั้นปี (`academic_year_level` ของทั้ง `StudentProfile` และ `ClassGroup`) มี **1–4** เท่านั้น
+และเลื่อนได้ปีละ 1 ชั้น (ปี 4 ถูกข้าม → `MAX_YEAR_REACHED`)
+
+| Method | Path | Role | คำอธิบาย |
+|---|---|---|---|
+| POST | `students/promote-group/` | admin (throttle `promotion: 20/hour`) | เลื่อนทุกคนในกลุ่มเรียนที่ตรง `from_year` **และตัว `ClassGroup` ด้วย** ระบุ `program` หรือ `class_group`, `from_year`, `reason` |
+| POST | `students/promote-selected/` | admin (throttle เดียวกัน) | เลื่อนเฉพาะ `ids` ที่เลือก (สูงสุด 200) **ไม่แตะ `ClassGroup`** — ส่ง `expected_years` (map id→year) หรือ `from_year`, `reason` |
+
+- ทั้งสอง endpoint รองรับ `dry_run: true` → คืนตัวอย่างผลลัพธ์โดยไม่เขียน DB/audit (UI ใช้ดูตัวอย่างก่อนยืนยัน)
+- Response: `{requested, succeeded, skipped, failed, results[]}` แต่แถวมี
+  `{id, student_code, student_name, from_year, to_year, ok, skipped, code, message}`
+- โค้ดข้ามต่อแถว: `YEAR_MISMATCH` (เลื่อนไปแล้ว/ข้อมูลเปลี่ยน), `INVALID_STATUS`, `MAX_YEAR_REACHED`
+- โค้ด error ของคำขอ: `REASON_REQUIRED`, `TARGET_YEAR_NOT_SUPPORTED` (ห้ามส่ง `to_year`),
+  `FROM_YEAR_REQUIRED` / `INVALID_EXPECTED_YEAR`, `INVALID_YEAR`, `INVALID_IDS`, `BATCH_TOO_LARGE`,
+  `SCOPE_REQUIRED` / `SCOPE_INVALID`, `CLASS_GROUP_NOT_FOUND`, `CLASS_GROUP_YEAR_MISMATCH`,
+  `CLASS_GROUP_PROGRAM_MISMATCH`, `PROGRAM_NOT_FOUND`, `NO_CLASS_GROUP`, `NO_STUDENTS`
+- ทุกครั้งที่เขียนจริงมี `log_audit`: ต่อนักศึกษา (`student_promote`), ต่อกลุ่ม (`class_group_promote`)
+  และสรุปชุด (`students_promotion`) พร้อม `reason`, `from_year`, `to_year`
+
 ## 7. Audit Logs ✅
 
 | Method | Path | Role |
@@ -97,7 +134,7 @@ Error response (ผ่าน `sams_exception_handler`):
 ## Throttle Rates (ตามจริงใน settings.py)
 
 - anon: 100/hour, user: 600/hour
-- **login: 10/min · checkin: 20/min · csv_import: 5/hour**
+- **login: 10/min · checkin: 20/min · csv_import: 5/hour · promotion: 20/hour**
 
 ## ตัวอย่าง Request สำคัญ
 

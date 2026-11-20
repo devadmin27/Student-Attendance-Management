@@ -11,11 +11,23 @@ ROLE_CHOICES = (
     ("student", "นักศึกษา"),
 )
 
-PROFILE_STATUS_CHOICES = (
+STUDENT_STATUS_CHOICES = (
+    ("studying", "กำลังศึกษา"),
+    ("graduated", "สำเร็จการศึกษา"),
+    ("withdrawn", "ลาออก"),
+    ("leave_of_absence", "พักการเรียน"),
+)
+
+# Instructor accounts keep their own vocabulary — student promotion/status
+# changes must never alter instructor account semantics.
+INSTRUCTOR_STATUS_CHOICES = (
     ("active", "ใช้งานอยู่"),
     ("suspended", "ระงับการใช้งาน"),
     ("inactive", "ไม่ใช้งาน"),
 )
+
+# Chosen academic year levels are 1-4 (student and class group alike).
+MAX_ACADEMIC_YEAR_LEVEL = 4
 
 
 class UserManager(BaseUserManager):
@@ -124,7 +136,7 @@ class StudentProfile(models.Model):
         related_name="students", verbose_name="กลุ่มเรียน",
     )
     status = models.CharField(
-        "สถานะ", max_length=16, choices=PROFILE_STATUS_CHOICES, default="active"
+        "สถานะ", max_length=16, choices=STUDENT_STATUS_CHOICES, default="studying"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -147,7 +159,7 @@ class InstructorProfile(models.Model):
     last_name = models.CharField("นามสกุล", max_length=100)
     department = models.CharField("หลักสูตร/สาขา", max_length=200, blank=True, default="")
     status = models.CharField(
-        "สถานะ", max_length=16, choices=PROFILE_STATUS_CHOICES, default="active"
+        "สถานะ", max_length=16, choices=INSTRUCTOR_STATUS_CHOICES, default="active"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -1,6 +1,7 @@
 """Admin management endpoints: users, students, instructors, CSV import."""
 import csv
 import io
+from uuid import UUID
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
@@ -14,7 +15,12 @@ from common.csvutils import sanitize_csv_value
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from apps.accounts.models import StudentProfile, User, InstructorProfile
+from apps.accounts.models import (
+    MAX_ACADEMIC_YEAR_LEVEL,
+    InstructorProfile,
+    StudentProfile,
+    User,
+)
 from apps.academics.models import ClassGroup, Program
 from apps.accounts.serializers import (
     InstructorProfileSerializer,
@@ -24,12 +30,15 @@ from apps.accounts.serializers import (
     UserSerializer,
 )
 from apps.audit.models import log_audit
-from apps.audit.throttles import CSVImportThrottle
+from apps.accounts.services import apply_promotion
+from apps.audit.throttles import CSVImportThrottle, PromotionThrottle
 from apps.attendance.models import AttendanceSession
 from common.permissions import AdminOnly, IsAdmin, IsAdminOrInstructor, RoleRequired
-from common.responses import success_response
+from common.responses import error_response, success_response
 
 WRITE_ACTIONS = {"create", "update", "partial_update", "destroy"}
+PROMOTION_ACTIONS = {"promote_group", "promote_selected"}
+MAX_PROMOTION_BATCH = 200
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -132,9 +141,18 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
     ordering = ["student_code"]
 
     def get_permissions(self):
-        if self.action in WRITE_ACTIONS or self.action == "import_csv":
+        if (
+            self.action in WRITE_ACTIONS
+            or self.action in PROMOTION_ACTIONS
+            or self.action == "import_csv"
+        ):
             return [AdminOnly()]
         return super().get_permissions()
+
+    def get_throttles(self):
+        if self.action in PROMOTION_ACTIONS:
+            return [PromotionThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -267,7 +285,12 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
                     if class_group is not None:
                         profile.class_group = class_group
                     default_year = class_group.academic_year_level if class_group else 1
-                    profile.academic_year_level = int(row.get("academic_year_level") or default_year)
+                    year = int(row.get("academic_year_level") or default_year)
+                    if not 1 <= year <= MAX_ACADEMIC_YEAR_LEVEL:
+                        raise ValueError(
+                            f"ชั้นปีต้องอยู่ระหว่าง 1–{MAX_ACADEMIC_YEAR_LEVEL}"
+                        )
+                    profile.academic_year_level = year
                     profile.save()
                     created += 1
                 except (ValueError, TypeError, KeyError) as exc:
@@ -284,6 +307,197 @@ class StudentProfileViewSet(viewsets.ModelViewSet):
         )
         message = f"นำเข้าสำเร็จ {created} รายการ" + (f" ล้มเหลว {len(errors)} รายการ" if errors else "")
         return success_response({"created": created, "failed": errors}, message)
+
+    # -- Year-level promotion ------------------------------------------------
+    def _promotion_common(self, request):
+        reason = str(request.data.get("reason", "") or "").strip()[:500]
+        if not reason:
+            return None, error_response(
+                "กรุณาระบุเหตุผลการเลื่อนชั้น", "REASON_REQUIRED", 400
+            )
+        if "to_year" in request.data:
+            return None, error_response(
+                "ระบบเลื่อนชั้นปีละ 1 ชั้นเท่านั้น", "TARGET_YEAR_NOT_SUPPORTED", 400
+            )
+        dry_run = str(request.data.get("dry_run", False)).lower() in {"1", "true", "yes"}
+        return (reason, dry_run), None
+
+    @staticmethod
+    def _promotion_message(payload, label):
+        message = f"{label}สำเร็จ {payload['succeeded']} รายการ"
+        if payload["skipped"]:
+            message += f" · ข้าม {payload['skipped']} รายการ"
+        if payload["failed"]:
+            message += f" · ไม่สำเร็จ {payload['failed']} รายการ"
+        if payload["dry_run"]:
+            message = f"ตัวอย่าง (ยังไม่บันทึก) — {message}"
+        return message
+
+    @action(detail=False, methods=["post"], url_path="promote-group")
+    def promote_group(self, request):
+        """Promote every student in matching class groups (+ the groups themselves)."""
+        common, error = self._promotion_common(request)
+        if error:
+            return error
+        reason, dry_run = common
+        try:
+            from_year = int(request.data.get("from_year"))
+        except (TypeError, ValueError):
+            return error_response("กรุณาระบุชั้นปีปัจจุบัน", "FROM_YEAR_REQUIRED", 400)
+        if not 1 <= from_year <= MAX_ACADEMIC_YEAR_LEVEL:
+            return error_response(
+                f"ชั้นปีต้องอยู่ระหว่าง 1–{MAX_ACADEMIC_YEAR_LEVEL}", "INVALID_YEAR", 400
+            )
+        program_id = str(request.data.get("program") or "").strip()
+        class_group_id = str(request.data.get("class_group") or "").strip()
+        if not program_id and not class_group_id:
+            return error_response("กรุณาเลือกหลักสูตรหรือกลุ่มเรียน", "SCOPE_REQUIRED", 400)
+
+        with transaction.atomic():
+            try:
+                if class_group_id:
+                    group = (
+                        ClassGroup.objects.select_related("program")
+                        .filter(pk=class_group_id).first()
+                    )
+                    if group is None:
+                        return error_response("ไม่พบกลุ่มเรียนที่ระบุ", "CLASS_GROUP_NOT_FOUND", 400)
+                    if group.academic_year_level != from_year:
+                        return error_response(
+                            "ชั้นปีของกลุ่มเรียนไม่ตรงกับชั้นปีที่ระบุ", "CLASS_GROUP_YEAR_MISMATCH", 400
+                        )
+                    if program_id and str(group.program_id) != program_id:
+                        return error_response(
+                            "กลุ่มเรียนที่เลือกไม่ได้อยู่ในหลักสูตรที่เลือก",
+                            "CLASS_GROUP_PROGRAM_MISMATCH", 400,
+                        )
+                    groups = [group]
+                    program = group.program
+                else:
+                    program = Program.objects.filter(pk=program_id).first()
+                    if program is None:
+                        return error_response("ไม่พบหลักสูตรที่ระบุ", "PROGRAM_NOT_FOUND", 400)
+                    groups = list(
+                        ClassGroup.objects.filter(
+                            program=program, academic_year_level=from_year
+                        ).select_for_update()
+                    )
+                    if not groups:
+                        return error_response(
+                            "ไม่พบกลุ่มเรียนในชั้นปีที่ระบุ", "NO_CLASS_GROUP", 400
+                        )
+                students = list(
+                    StudentProfile.objects.filter(class_group__in=groups)
+                    .select_for_update(of=("self",))
+                    .select_related("class_group")
+                    .order_by("student_code")
+                )
+            except (DjangoValidationError, ValueError, TypeError):
+                return error_response("รหัสหลักสูตรหรือกลุ่มเรียนไม่ถูกต้อง", "SCOPE_INVALID", 400)
+            if not students:
+                return error_response("ไม่พบนักศึกษาในกลุ่มเรียนที่ระบุ", "NO_STUDENTS", 400)
+
+            payload = apply_promotion(
+                students=students,
+                expected_years={student.pk: from_year for student in students},
+                groups=groups,
+                actor=request.user,
+                request=request,
+                mode="group",
+                reason=reason,
+                scope={
+                    "program": str(program.pk),
+                    "from_year": from_year,
+                    "class_group": class_group_id or None,
+                },
+                dry_run=dry_run,
+            )
+        return success_response(payload, self._promotion_message(payload, "เลื่อนชั้นกลุ่มเรียน"))
+
+    @action(detail=False, methods=["post"], url_path="promote-selected")
+    def promote_selected(self, request):
+        """Promote the chosen students only; class groups stay untouched."""
+        common, error = self._promotion_common(request)
+        if error:
+            return error
+        reason, dry_run = common
+        raw_ids = request.data.get("ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return error_response("กรุณาเลือกนักศึกษาอย่างน้อย 1 รายการ", "INVALID_IDS", 400)
+        if len(raw_ids) > MAX_PROMOTION_BATCH:
+            return error_response(
+                f"เลือกได้ครั้งละไม่เกิน {MAX_PROMOTION_BATCH} รายการ", "BATCH_TOO_LARGE", 400
+            )
+        try:
+            ids = list(dict.fromkeys(UUID(str(value)) for value in raw_ids))
+        except (TypeError, ValueError, AttributeError):
+            return error_response("มีรหัสนักศึกษาที่ไม่ถูกต้อง", "INVALID_IDS", 400)
+
+        raw_expected = request.data.get("expected_years")
+        expected = {}
+        if isinstance(raw_expected, dict):
+            try:
+                for key, value in raw_expected.items():
+                    year = int(value)
+                    if not 1 <= year <= MAX_ACADEMIC_YEAR_LEVEL:
+                        raise ValueError(year)
+                    expected[UUID(str(key))] = year
+            except (TypeError, ValueError, AttributeError):
+                return error_response(
+                    "ข้อมูลชั้นปีที่คาดหวังไม่ถูกต้อง", "INVALID_EXPECTED_YEAR", 400
+                )
+        else:
+            try:
+                from_year = int(request.data.get("from_year"))
+            except (TypeError, ValueError):
+                return error_response(
+                    "กรุณาระบุชั้นปีปัจจุบันหรือชั้นปีที่คาดหวัง", "FROM_YEAR_REQUIRED", 400
+                )
+            if not 1 <= from_year <= MAX_ACADEMIC_YEAR_LEVEL:
+                return error_response(
+                    f"ชั้นปีต้องอยู่ระหว่าง 1–{MAX_ACADEMIC_YEAR_LEVEL}", "INVALID_YEAR", 400
+                )
+            expected = {pk: from_year for pk in ids}
+        for pk in ids:
+            expected.setdefault(pk, -1)  # missing expectation -> YEAR_MISMATCH
+
+        with transaction.atomic():
+            scoped = {
+                student.pk: student
+                for student in (
+                    StudentProfile.objects.filter(pk__in=ids)
+                    .select_for_update(of=("self",))
+                )
+            }
+            ordered = [scoped[pk] for pk in ids if pk in scoped]
+            missing = [pk for pk in ids if pk not in scoped]
+            if not ordered:
+                return error_response(
+                    "ไม่พบนักศึกษาที่เลือกหรือไม่มีสิทธิ์จัดการ", "NO_STUDENTS", 400
+                )
+            payload = apply_promotion(
+                students=ordered,
+                expected_years=expected,
+                actor=request.user,
+                request=request,
+                mode="selected",
+                reason=reason,
+                scope={"requested": len(ids), "class_group": False},
+                dry_run=dry_run,
+            )
+            if missing:
+                payload["results"].extend(
+                    {
+                        "id": str(pk), "student_code": "", "student_name": "",
+                        "from_year": None, "to_year": None,
+                        "ok": False, "skipped": False,
+                        "code": "NOT_FOUND", "message": "ไม่พบนักศึกษาหรือไม่มีสิทธิ์จัดการ",
+                    }
+                    for pk in missing
+                )
+                payload["requested"] = len(ids)
+                payload["failed"] += len(missing)
+        return success_response(payload, self._promotion_message(payload, "เลื่อนชั้นที่เลือก"))
 
 
 class InstructorProfileViewSet(viewsets.ModelViewSet):

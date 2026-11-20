@@ -1,6 +1,7 @@
 """Serializers for academic structure."""
 from rest_framework import serializers
 
+from apps.accounts.models import MAX_ACADEMIC_YEAR_LEVEL
 from apps.academics.models import AcademicTerm, ClassGroup, Program
 
 
@@ -24,6 +25,13 @@ class ClassGroupSerializer(serializers.ModelSerializer):
             "academic_year_level", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_academic_year_level(self, value):
+        if not 1 <= value <= MAX_ACADEMIC_YEAR_LEVEL:
+            raise serializers.ValidationError(
+                f"ชั้นปีต้องอยู่ระหว่าง 1–{MAX_ACADEMIC_YEAR_LEVEL}"
+            )
+        return value
 
 
 class AcademicTermSerializer(serializers.ModelSerializer):

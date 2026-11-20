@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from apps.accounts.auth_policy import AccountStatusBlocked, blocked_login_message
 from apps.accounts.serializers import MeSerializer, SAMSLoginSerializer
 from apps.audit.models import log_audit
 from apps.audit.throttles import LoginRateThrottle
@@ -56,7 +57,13 @@ class LoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except AccountStatusBlocked as exc:
+            # Return the specific reason instead of the generic 403 title.
+            return _error_response(
+                str(exc.detail), exc.default_code, status.HTTP_403_FORBIDDEN
+            )
         data = serializer.validated_data
         refresh = data.pop("refresh")
         response = Response(
@@ -120,6 +127,11 @@ class RefreshView(views.APIView):
             return _error_response("เซสชันไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่", "REFRESH_INVALID", 401)
         if not (user.is_active and user.role):
             return _error_response("บัญชีถูกระงับการใช้งาน", "ACCOUNT_SUSPENDED", 403)
+        message = blocked_login_message(user)
+        if message:
+            response = _error_response(message, "ACCOUNT_STATUS_BLOCKED", 403)
+            _clear_refresh_cookie(response)
+            return response
 
         _blacklist(old)
         new = RefreshToken.for_user(user)

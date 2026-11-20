@@ -9,7 +9,7 @@ const fields: FieldDef[] = [
   { name: "group_code", label: "รหัสกลุ่มเรียน", type: "text", required: true, placeholder: "เช่น IT-1" },
   { name: "group_name", label: "ชื่อกลุ่มเรียน", type: "text", required: true },
   { name: "program", label: "หลักสูตร", type: "select", required: true, optionsKey: "programs" },
-  { name: "academic_year_level", label: "ชั้นปี", type: "number", min: 1, max: 8, defaultValue: 1 },
+  { name: "academic_year_level", label: "ชั้นปี", type: "number", min: 1, max: 4, defaultValue: 1, hint: "1-4" },
 ];
 
 export default function AdminClassGroupsPage() {

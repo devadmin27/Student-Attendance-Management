@@ -386,3 +386,294 @@ class StudentCSVImportTests(BaseSamsTest):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data["code"], "PROGRAM_NOT_FOUND")
+
+
+class StudentStatusAuthTests(BaseSamsTest):
+    """Final student states block sign-in; a leave of absence does not."""
+
+    def _set_status(self, value):
+        self.student.status = value
+        self.student.save(update_fields=["status"])
+
+    def test_graduated_and_withdrawn_cannot_login(self):
+        for value, keyword in (("graduated", "สำเร็จการศึกษา"), ("withdrawn", "ลาออก")):
+            with self.subTest(status=value):
+                self._set_status(value)
+                response = self.client.post(
+                    "/api/v1/auth/login/",
+                    {"username": "s64001", "password": "Str0ngStud!Pass"},
+                )
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "ACCOUNT_STATUS_BLOCKED")
+                self.assertIn(keyword, str(response.data["message"]))
+
+    def test_leave_of_absence_can_still_login(self):
+        self._set_status("leave_of_absence")
+        response = self.client.post(
+            "/api/v1/auth/login/",
+            {"username": "s64001", "password": "Str0ngStud!Pass"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["success"])
+
+    def test_refresh_blocked_for_graduated_and_clears_cookie(self):
+        login = self.client.post(
+            "/api/v1/auth/login/",
+            {"username": "s64001", "password": "Str0ngStud!Pass"},
+        )
+        raw = login.cookies["sams_refresh"].value
+        self._set_status("graduated")
+        self.client.credentials()
+        self.client.cookies["sams_refresh"] = raw
+        response = self.client.post("/api/v1/auth/refresh/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "ACCOUNT_STATUS_BLOCKED")
+        self.assertIn("sams_refresh", response.cookies)
+
+
+class StudentYearValidationTests(BaseSamsTest):
+    def test_create_rejects_year_above_four(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.client.post(
+            "/api/v1/students/",
+            {
+                "username": "s64010", "email": "s10@x.ac.th",
+                "password": "Str0ngStud!Pass", "student_code": "640010",
+                "first_name": "ปี", "last_name": "เกิน", "academic_year_level": 5,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("academic_year_level", response.data["errors"])
+
+    def test_update_rejects_year_zero(self):
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+        response = self.client.patch(
+            f"/api/v1/students/{self.student.pk}/", {"academic_year_level": 0}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("academic_year_level", response.data["errors"])
+
+
+class StudentPromotionTests(BaseSamsTest):
+    """Group mode moves the class group too; selected mode never does."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.audit.models import AuditLog
+
+        self.AuditLog = AuditLog
+        self.auth_user(self.admin_user, "Str0ngAdmin!Pass")
+
+    def _extra_student(self, username="s64002", code="640002", year=1, status="studying"):
+        user = User.objects.create_user(username, f"{username}@x.ac.th", "Str0ngStud!Pass", role="student")
+        profile = user.student_profile
+        profile.student_code = code
+        profile.first_name = "เพิ่ม"
+        profile.last_name = "ทดสอบ"
+        profile.program = self.program
+        profile.class_group = self.group
+        profile.academic_year_level = year
+        profile.status = status
+        profile.save()
+        return profile
+
+    def _promote(self, url, data):
+        return self.client.post(f"/api/v1/students/{url}/", data, format="json")
+
+    # -- group mode ----------------------------------------------------------
+    def test_promote_group_dry_run_changes_nothing(self):
+        response = self._promote(
+            "promote-group",
+            {"program": str(self.program.pk), "from_year": 1, "reason": "ขึ้นปีการศึกษาใหม่", "dry_run": True},
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        data = response.data["data"]
+        self.assertTrue(data["dry_run"])
+        self.assertEqual(data["succeeded"], 1)
+        self.student.refresh_from_db()
+        self.group.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 1)
+        self.assertEqual(self.group.academic_year_level, 1)
+        self.assertFalse(self.AuditLog.objects.filter(action="student_promote").exists())
+
+    def test_promote_group_writes_students_and_group_with_audit(self):
+        response = self._promote(
+            "promote-group",
+            {"program": str(self.program.pk), "from_year": 1, "reason": "ขึ้นปีการศึกษาใหม่"},
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        data = response.data["data"]
+        self.assertEqual((data["requested"], data["succeeded"], data["skipped"], data["failed"]), (1, 1, 0, 0))
+        self.student.refresh_from_db()
+        self.group.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 2)
+        self.assertEqual(self.group.academic_year_level, 2)
+        self.assertEqual(self.AuditLog.objects.filter(action="student_promote").count(), 1)
+        self.assertEqual(self.AuditLog.objects.filter(action="class_group_promote").count(), 1)
+        summary = self.AuditLog.objects.filter(action="students_promotion").first()
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.metadata["reason"], "ขึ้นปีการศึกษาใหม่")
+
+    def test_promote_group_is_idempotent(self):
+        self._promote(
+            "promote-group",
+            {"program": str(self.program.pk), "from_year": 1, "reason": "รอบแรก"},
+        )
+        second = self._promote(
+            "promote-group",
+            {"program": str(self.program.pk), "from_year": 1, "reason": "รอบสอง"},
+        )
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+        self.student.refresh_from_db()
+        self.group.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 2)
+        self.assertEqual(self.group.academic_year_level, 2)
+
+    def test_promote_group_skips_non_studying_and_year_four(self):
+        self._extra_student("s64003", "640003", year=4)
+        self._extra_student("s64004", "640004", status="graduated")
+        response = self._promote(
+            "promote-group",
+            {"program": str(self.program.pk), "from_year": 1, "reason": "ขึ้นปี"},
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        data = response.data["data"]
+        self.assertEqual(data["skipped"], 2)
+        codes = {row["code"] for row in data["results"] if row["skipped"]}
+        self.assertEqual(codes, {"MAX_YEAR_REACHED", "INVALID_STATUS"})
+
+    # -- selected mode -------------------------------------------------------
+    def test_promote_selected_does_not_touch_class_group(self):
+        response = self._promote(
+            "promote-selected",
+            {
+                "ids": [str(self.student.pk)],
+                "expected_years": {str(self.student.pk): 1},
+                "reason": "เลื่อนรายคน",
+            },
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        self.student.refresh_from_db()
+        self.group.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 2)
+        self.assertEqual(self.group.academic_year_level, 1)
+        self.assertFalse(self.AuditLog.objects.filter(action="class_group_promote").exists())
+
+    def test_promote_selected_year_mismatch_is_skipped(self):
+        self.student.academic_year_level = 2
+        self.student.save(update_fields=["academic_year_level"])
+        response = self._promote(
+            "promote-selected",
+            {
+                "ids": [str(self.student.pk)],
+                "expected_years": {str(self.student.pk): 1},
+                "reason": "ซ้ำ",
+            },
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        data = response.data["data"]
+        self.assertEqual(data["skipped"], 1)
+        self.assertEqual(data["results"][0]["code"], "YEAR_MISMATCH")
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 2)
+
+    def test_promote_selected_batches_independently(self):
+        other = self._extra_student("s64005", "640005", status="withdrawn")
+        response = self._promote(
+            "promote-selected",
+            {
+                "ids": [str(self.student.pk), str(other.pk)],
+                "expected_years": {str(self.student.pk): 1, str(other.pk): 1},
+                "reason": "เลื่อนหลายคน",
+            },
+        )
+        self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+        data = response.data["data"]
+        self.assertEqual((data["succeeded"], data["skipped"]), (1, 1))
+        self.student.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(self.student.academic_year_level, 2)
+        self.assertEqual(other.academic_year_level, 1)
+
+    # -- request validation / RBAC -------------------------------------------
+    def test_promotion_requires_reason(self):
+        response = self._promote(
+            "promote-selected", {"ids": [str(self.student.pk)], "from_year": 1}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "REASON_REQUIRED")
+
+    def test_promotion_rejects_to_year(self):
+        response = self._promote(
+            "promote-selected",
+            {"ids": [str(self.student.pk)], "from_year": 1, "to_year": 3, "reason": "x"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "TARGET_YEAR_NOT_SUPPORTED")
+
+    def test_promotion_rejects_batch_over_limit(self):
+        ids = [str(uuid.uuid4()) for _ in range(201)]
+        response = self._promote(
+            "promote-selected", {"ids": ids, "from_year": 1, "reason": "x"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "BATCH_TOO_LARGE")
+
+    def test_instructor_cannot_promote(self):
+        self.client.credentials()
+        self.auth_user(self.instructor_user, "Str0ngTeach!Pass")
+        for url, data in (
+            ("promote-group", {"program": str(self.program.pk), "from_year": 1, "reason": "x"}),
+            ("promote-selected", {"ids": [str(self.student.pk)], "from_year": 1, "reason": "x"}),
+        ):
+            with self.subTest(url=url):
+                response = self._promote(url, data)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class StudentStatusVocabularyTests(APITestCase):
+    """The migration mapping and the split vocabularies stay intentional."""
+
+    def test_choices_are_split_and_statuses_are_ascii(self):
+        from apps.accounts.models import INSTRUCTOR_STATUS_CHOICES, STUDENT_STATUS_CHOICES
+
+        self.assertEqual(
+            {value for value, _ in STUDENT_STATUS_CHOICES},
+            {"studying", "graduated", "withdrawn", "leave_of_absence"},
+        )
+        self.assertEqual(
+            {value for value, _ in INSTRUCTOR_STATUS_CHOICES},
+            {"active", "suspended", "inactive"},
+        )
+
+    def test_migration_mapping_preserves_meaning(self):
+        import importlib
+
+        migration = importlib.import_module(
+            "apps.accounts.migrations.0003_student_status_vocabulary"
+        )
+        self.assertEqual(
+            migration.FORWARD,
+            {"active": "studying", "suspended": "leave_of_absence", "inactive": "withdrawn"},
+        )
+        self.assertEqual(migration.REVERSE["graduated"], "inactive")
+
+    def test_map_status_rewrites_existing_rows(self):
+        import importlib
+
+        from django.apps import apps
+
+        from apps.accounts.models import User
+
+        user = User.objects.create_user(
+            "mig001", "mig@x.ac.th", "Str0ngStud!Pass", role="student"
+        )
+        profile = user.student_profile
+        profile.status = "suspended"
+        profile.save(update_fields=["status"])
+        migration = importlib.import_module(
+            "apps.accounts.migrations.0003_student_status_vocabulary"
+        )
+        migration.map_status(apps, migration.FORWARD)
+        profile.refresh_from_db()
+        self.assertEqual(profile.status, "leave_of_absence")

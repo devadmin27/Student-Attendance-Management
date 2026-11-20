@@ -44,8 +44,8 @@
 | `student_code` | varchar(32) |  |
 | `first_name` | varchar(100) |  |
 | `last_name` | varchar(100) |  |
-| `academic_year_level` | smallint |  |
-| `status` | varchar(16) |  |
+| `academic_year_level` | smallint | 1–4 (เลื่อนปีละ 1 ชั้น สูงสุดชั้นปี 4) |
+| `status` | varchar(16) | `studying` / `graduated` / `withdrawn` / `leave_of_absence` (คนละชุดกับสถานะอาจารย์) |
 | `created_at` | timestamptz | สร้างเมื่อ (UTC) |
 | `updated_at` | timestamptz | แก้ไขล่าสุด (UTC) |
 | `class_group_id` | uuid |  |
@@ -91,7 +91,7 @@
 | `id` | uuid | PK (UUID) |
 | `group_code` | varchar(32) |  |
 | `group_name` | varchar(100) |  |
-| `academic_year_level` | smallint |  |
+| `academic_year_level` | smallint | 1–4 (เลื่อนพร้อมนักศึกษาในโหมด promote-group) |
 | `created_at` | timestamptz | สร้างเมื่อ (UTC) |
 | `updated_at` | timestamptz | แก้ไขล่าสุด (UTC) |
 | `program_id` | uuid |  |

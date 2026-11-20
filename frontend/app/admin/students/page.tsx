@@ -4,6 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "@/components/AppShell";
 import CrudPage, { type FieldDef } from "@/components/CrudPage";
 import { StatusBadge } from "@/components/ui";
+import {
+  BulkPromoteButton,
+  StudentPromotionActions,
+} from "@/components/StudentPromotion";
 import { useRequireRole } from "@/lib/auth-context";
 import { samsRequest, ApiError } from "@/lib/api";
 import { loadOptions, type Option } from "@/lib/options";
@@ -11,9 +15,10 @@ import { alertError, toastSuccess } from "@/lib/swal";
 import type { StudentProfile } from "@/lib/types";
 
 const STATUS_OPTIONS = [
-  { value: "active", label: "ใช้งานอยู่" },
-  { value: "suspended", label: "ระงับการใช้งาน" },
-  { value: "inactive", label: "ไม่ใช้งาน" },
+  { value: "studying", label: "กำลังศึกษา" },
+  { value: "graduated", label: "สำเร็จการศึกษา" },
+  { value: "withdrawn", label: "ลาออก" },
+  { value: "leave_of_absence", label: "พักการเรียน" },
 ];
 
 const fields: FieldDef[] = [
@@ -29,12 +34,12 @@ const fields: FieldDef[] = [
     label: "ชั้นปี",
     type: "number",
     min: 1,
-    max: 8,
+    max: 4,
     defaultValue: 1,
-    hint: "1-8",
+    hint: "1-4",
   },
   { name: "class_group", label: "กลุ่มเรียน", type: "select", optionsKey: "class-groups" },
-  { name: "status", label: "สถานะนักศึกษา", type: "select", options: STATUS_OPTIONS, defaultValue: "active" },
+  { name: "status", label: "สถานะนักศึกษา", type: "select", options: STATUS_OPTIONS, defaultValue: "studying" },
 ];
 
 const inputClass =
@@ -348,6 +353,15 @@ export default function AdminStudentsPage() {
           { name: "status", label: "สถานะ", options: STATUS_OPTIONS },
         ]}
         deleteLabel="ลบนักศึกษา"
+        selectable
+        selectionActions={(rows, refresh, clearSelection) => (
+          <StudentPromotionActions
+            rows={rows}
+            refresh={refresh}
+            clearSelection={clearSelection}
+          />
+        )}
+        headerExtra={(refresh) => <BulkPromoteButton refresh={refresh} />}
       />
     </AppShell>
   );

@@ -234,6 +234,7 @@ REST_FRAMEWORK = {
         "login": "10/min",
         "checkin": "20/min",
         "csv_import": "5/hour",
+        "promotion": "20/hour",
         # Roster polling (5s interval ≈ 720/h in-window; headroom for
         # longer sessions and manual refreshes). Separate from the global
         # `user` budget so polling cannot starve the rest of the UI.

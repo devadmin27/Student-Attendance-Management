@@ -56,8 +56,17 @@ class NotEnrolled(APIException):
 
 class AccountSuspended(APIException):
     status_code = 403
-    default_detail = "บัญชีของคุณถูกระงับการใช้งาน"
+    default_detail = "บัญชีของคุณไม่สามารถเช็คชื่อได้"
     default_code = "ACCOUNT_SUSPENDED"
+
+
+# Keep the existing error code so the student scan screen keeps working, but
+# explain which student status actually blocked the check-in.
+NON_STUDYING_MESSAGES = {
+    "graduated": "คุณสำเร็จการศึกษาแล้ว จึงเช็คชื่อไม่ได้",
+    "withdrawn": "คุณลาออกแล้ว จึงเช็คชื่อไม่ได้",
+    "leave_of_absence": "คุณอยู่ในสถานะพักการเรียน จึงเช็คชื่อไม่ได้",
+}
 
 
 class DuplicateAttendance(APIException):
@@ -128,8 +137,12 @@ def check_in(user, raw_token: str, location: dict | None = None,
     student_profile = getattr(user, "student_profile", None)
     if student_profile is None:
         raise NotEnrolled()
-    if student_profile.status != "active":
-        raise AccountSuspended()
+    if student_profile.status != "studying":
+        raise AccountSuspended(
+            NON_STUDYING_MESSAGES.get(
+                student_profile.status, "บัญชีของคุณไม่สามารถเช็คชื่อได้"
+            )
+        )
 
     now = timezone.now()
     if session.status == "cancelled":

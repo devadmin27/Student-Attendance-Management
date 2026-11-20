@@ -29,7 +29,7 @@ export interface StudentProfile {
   academic_year_level: number;
   class_group: string | null;
   class_group_name: string | null;
-  status: "active" | "suspended" | "inactive";
+  status: "studying" | "graduated" | "withdrawn" | "leave_of_absence";
   created_at?: string;
   updated_at?: string;
 }
@@ -134,6 +134,31 @@ export interface EnrollmentBatchResult {
   skipped: number;
   failed: number;
   results: EnrollmentBatchRow[];
+}
+
+/** One row of a student year-level promotion response. */
+export interface StudentPromotionRow {
+  id: string;
+  student_code: string;
+  student_name: string;
+  from_year: number | null;
+  to_year: number | null;
+  ok: boolean;
+  skipped: boolean;
+  code: string;
+  message: string;
+}
+
+/** Result of `POST /students/promote-group/` or `promote-selected/`. */
+export interface StudentPromotionResult {
+  mode: "group" | "selected";
+  scope: Record<string, unknown>;
+  dry_run: boolean;
+  requested: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  results: StudentPromotionRow[];
 }
 
 export interface ClassSchedule {

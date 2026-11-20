@@ -122,7 +122,12 @@ class StudentProfileAdmin(admin.ModelAdmin):
 
     @admin.display(description="สถานะ")
     def status_badge(self, obj):
-        return _badge(obj.status, {"active": "#16a34a", "inactive": "#6b7280", "suspended": "#dc2626"})
+        return _badge(obj.status, {
+            "studying": "#16a34a",
+            "graduated": "#2563eb",
+            "withdrawn": "#6b7280",
+            "leave_of_absence": "#dc2626",
+        })
 
 
 @admin.register(InstructorProfile)

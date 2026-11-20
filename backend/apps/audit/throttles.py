@@ -28,6 +28,11 @@ class CSVImportThrottle(ScopedRateThrottle):
     throttle_scope = "csv_import"
 
 
+class PromotionThrottle(ScopedRateThrottle):
+    """Guard against accidentally repeating a mass year-level promotion."""
+    throttle_scope = "promotion"
+
+
 class AttendancePollThrottle(UserScopeThrottle):
     """Sustained roster-polling budget (per instructor, per hour)."""
 
