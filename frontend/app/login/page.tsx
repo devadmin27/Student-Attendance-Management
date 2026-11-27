@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth, roleHome } from "@/lib/auth-context";
 import { alertError } from "@/lib/swal";
+import { apiBaseUrl } from "@/lib/api";
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -12,6 +13,32 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [kcEnabled, setKcEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const base = apiBaseUrl();
+        const res = await fetch(`${base}/auth/keycloak/config/`, {
+          method: "GET",
+          credentials: "include",
+        });
+        const json = (await res.json().catch(() => null)) as {
+          success?: boolean;
+          data?: { enabled?: boolean };
+        } | null;
+        if (!cancelled && json?.success && json.data?.enabled) {
+          setKcEnabled(true);
+        }
+      } catch {
+        if (!cancelled) setKcEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Already authenticated → send to role home.
   useEffect(() => {
@@ -33,6 +60,12 @@ export default function LoginPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const startKeycloakLogin = () => {
+    const base = apiBaseUrl();
+    const next = encodeURIComponent("/student/dashboard"); // default; callback will also honor ?next if backend stored
+    window.location.href = `${base}/auth/keycloak/login/?next=${next}`;
   };
 
   return (
@@ -84,15 +117,29 @@ export default function LoginPage() {
             disabled={submitting || loading}
             className="w-full rounded-lg bg-blue-700 px-4 py-2.5 font-medium text-white hover:bg-blue-800 disabled:opacity-50"
           >
-            {submitting ? "กำลังเข้าสู่ระบบ…" : "เข้าสู่ระบบ"}
+            {submitting ? "กำลังเข้าสู่ระบบ…" : "เข้าสู่ระบบด้วยบัญชี SAMS"}
           </button>
+          {kcEnabled && (
+            <>
+              <div className="relative flex items-center py-1">
+                <div className="flex-grow border-t border-slate-200" />
+                <span className="mx-2 flex-shrink text-xs text-slate-400">หรือ</span>
+                <div className="flex-grow border-t border-slate-200" />
+              </div>
+              <button
+                type="button"
+                onClick={startKeycloakLogin}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-medium text-slate-800 hover:bg-slate-50"
+              >
+                เข้าสู่ระบบด้วยบัญชีสถาบัน (Keycloak)
+              </button>
+            </>
+          )}
           <div className="flex items-center justify-between text-xs text-slate-500">
             <Link href="/" className="hover:text-blue-700">
               ← กลับหน้าแรก
             </Link>
-            <span>
-              ปลอดภัยด้วย JWT · Refresh Token แบบ HttpOnly Cookie
-            </span>
+            <span>ปลอดภัยด้วย JWT · Refresh Token แบบ HttpOnly Cookie</span>
           </div>
         </form>
       </div>

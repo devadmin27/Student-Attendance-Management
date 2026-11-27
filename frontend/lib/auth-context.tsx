@@ -109,6 +109,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // logout should never block the UI
     }
+    try {
+      const kcRes = await api.post<{ success: boolean; message?: string; data?: { keycloak_end_session_url?: string | null } }>(
+        "/auth/keycloak/logout/",
+        {},
+      );
+      const endUrl = kcRes.data?.data?.keycloak_end_session_url;
+      setAccessToken(null);
+      setUser(null);
+      if (endUrl && typeof endUrl === "string") {
+        window.location.href = endUrl;
+        return;
+      }
+    } catch {
+      // ignore
+    }
     setAccessToken(null);
     setUser(null);
     router.replace("/login");

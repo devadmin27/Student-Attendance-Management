@@ -10,6 +10,10 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "ax
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+export function apiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,

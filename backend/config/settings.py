@@ -355,6 +355,37 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 REFRESH_COOKIE_NAME = "sams_refresh"
 REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_LIFETIME_DAYS * 24 * 3600
 
+# ---------------------------------------------------------------------------
+# Keycloak (OIDC) — optional authentication provider
+# ---------------------------------------------------------------------------
+KEYCLOAK_ENABLED = env_bool("KEYCLOAK_ENABLED", False)
+KEYCLOAK_BASE_URL = env("KEYCLOAK_BASE_URL", "").rstrip("/")
+KEYCLOAK_REALM = env("KEYCLOAK_REALM", "")
+KEYCLOAK_CLIENT_ID = env("KEYCLOAK_CLIENT_ID", "")
+KEYCLOAK_CLIENT_SECRET = env("KEYCLOAK_CLIENT_SECRET", "")
+KEYCLOAK_REDIRECT_URI = env("KEYCLOAK_REDIRECT_URI", "")
+KEYCLOAK_ISSUER = env(
+    "KEYCLOAK_ISSUER",
+    (f"{KEYCLOAK_BASE_URL}/realms/{KEYCLOAK_REALM}" if KEYCLOAK_BASE_URL and KEYCLOAK_REALM else ""),
+).rstrip("/")
+KEYCLOAK_JWKS_URI = env(
+    "KEYCLOAK_JWKS_URI",
+    (f"{KEYCLOAK_ISSUER}/protocol/openid-connect/certs" if KEYCLOAK_ISSUER else ""),
+)
+KEYCLOAK_SCOPES = env("KEYCLOAK_SCOPES", "openid profile email")
+KEYCLOAK_END_SESSION_ON_LOGOUT = env_bool("KEYCLOAK_END_SESSION_ON_LOGOUT", False)
+KEYCLOAK_POST_LOGOUT_REDIRECT_URI = env("KEYCLOAK_POST_LOGOUT_REDIRECT_URI", "")
+FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+
+# Auto-link: link Keycloak (issuer,sub) to an existing SAMS user on first login
+# only when IdP asserts email_verified true and email matches exactly one active user.
+KEYCLOAK_AUTO_LINK_BY_VERIFIED_EMAIL = env_bool("KEYCLOAK_AUTO_LINK_BY_VERIFIED_EMAIL", False)
+KEYCLOAK_AUTO_LINK_ALLOWED_DOMAINS = [
+    d.strip().lower().lstrip("@")
+    for d in env("KEYCLOAK_AUTO_LINK_ALLOWED_DOMAINS", "").split(",")
+    if d.strip()
+]
+
 
 # ---------------------------------------------------------------------------
 # Security settings (production hardening)
