@@ -51,7 +51,7 @@ export default function AdminInstructorsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<InstructorProfile | null>(null);
-  const [form, setForm] = useState<Record<string, string>>({});
+  const [form, setForm] = useState<Record<string, string | boolean>>({});
   const [saving, setSaving] = useState(false);
   const [programs, setPrograms] = useState<Program[]>([]);
 
@@ -117,9 +117,8 @@ export default function AdminInstructorsPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ email: "", department: "" });
+    setForm({ email: "", department: "", auto_provision_keycloak: false });
     setModalOpen(true);
-    void toastSuccess("แบบฟอร์มพร้อมใช้งาน");
   };
 
   const openEdit = (row: InstructorProfile) => {
@@ -132,6 +131,7 @@ export default function AdminInstructorsPage() {
       last_name: row.last_name,
       department: row.department,
       password: "",
+      auto_provision_keycloak: false,
     });
     setModalOpen(true);
   };
@@ -156,7 +156,10 @@ export default function AdminInstructorsPage() {
         await samsRequest({
           url: "/instructors/",
           method: "POST",
-          data: form,
+          data: {
+            ...form,
+            auto_provision_keycloak: Boolean(form.auto_provision_keycloak),
+          },
         });
         await toastSuccess("เพิ่มอาจารย์สำเร็จ (สร้างบัญชีให้อัตโนมัติ)");
       }
@@ -292,7 +295,7 @@ export default function AdminInstructorsPage() {
                       <input
                         id={`instr-${f.name}`}
                         type="email"
-                        value={form[f.name] ?? ""}
+                        value={String(form[f.name] ?? "")}
                         disabled
                         className={`${inputClass} bg-slate-100 text-slate-500`}
                       />
@@ -300,7 +303,7 @@ export default function AdminInstructorsPage() {
                   ) : f.name === "department" ? (
                     <select
                       id={`instr-${f.name}`}
-                      value={form[f.name] ?? ""}
+                      value={String(form[f.name] ?? "")}
                       onChange={(e) => setForm((p) => ({ ...p, [f.name]: e.target.value }))}
                       className={`${inputClass} bg-white`}
                     >
@@ -316,13 +319,27 @@ export default function AdminInstructorsPage() {
                       id={`instr-${f.name}`}
                       type={"type" in f ? f.type : "text"}
                       required={"required" in f ? f.required : false}
-                      value={form[f.name] ?? ""}
+                      value={String(form[f.name] ?? "")}
                       onChange={(e) => setForm((p) => ({ ...p, [f.name]: e.target.value }))}
                       className={inputClass}
                     />
                   )}
                 </div>
               ))}
+              {!editing && (
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(form.auto_provision_keycloak)}
+                      onChange={(e) => setForm((p) => ({ ...p, auto_provision_keycloak: e.target.checked }))}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    Auto-Provision ไปยัง Keycloak
+                  </label>
+                  <p className="text-xs text-slate-500">สร้างบัญชีใน Keycloak และผูก ExternalIdentity ทันที (ต้องตั้งค่า Keycloak Admin API แล้ว)</p>
+                </div>
+              )}
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button

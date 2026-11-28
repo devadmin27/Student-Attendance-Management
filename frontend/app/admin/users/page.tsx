@@ -43,6 +43,13 @@ const fields: FieldDef[] = [
     createOnly: true,
   },
   { name: "is_active", label: "สถานะบัญชี", type: "checkbox", hint: "เปิดใช้งานบัญชี" },
+  {
+    name: "auto_provision_keycloak",
+    label: "Auto-Provision ไปยัง Keycloak",
+    type: "checkbox",
+    createOnly: true,
+    hint: "สร้างบัญชีใน Keycloak และผูก ExternalIdentity ทันที (ต้องตั้งค่า Keycloak Admin API แล้ว)",
+  },
 ];
 
 export default function AdminUsersPage() {

@@ -40,6 +40,13 @@ const fields: FieldDef[] = [
   },
   { name: "class_group", label: "กลุ่มเรียน", type: "select", optionsKey: "class-groups" },
   { name: "status", label: "สถานะนักศึกษา", type: "select", options: STATUS_OPTIONS, defaultValue: "studying" },
+  {
+    name: "auto_provision_keycloak",
+    label: "Auto-Provision ไปยัง Keycloak",
+    type: "checkbox",
+    createOnly: true,
+    hint: "สร้างใน Keycloak และผูกบัญชีทันที",
+  },
 ];
 
 const inputClass =
@@ -84,6 +91,7 @@ export default function AdminStudentsPage() {
   const [importing, setImporting] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [autoProvisionKeycloak, setAutoProvisionKeycloak] = useState(false);
 
   // ── import scope modal (หลักสูตร + กลุ่มเรียน) ──
   const [importOpen, setImportOpen] = useState(false);
@@ -155,18 +163,32 @@ export default function AdminStudentsPage() {
       form.append("file", csvFile);
       form.append("program", selectedProgram);
       form.append("class_group", selectedGroup);
-      const { data, envelope } = await samsRequest<{ created: number; failed: { row: number; message: string }[] }>({
+      if (autoProvisionKeycloak) form.append("auto_provision_keycloak", "true");
+      const { data, envelope } = await samsRequest<{
+        created: number;
+        failed: { row: number; message: string }[];
+        provision_failed?: { row: number; username?: string; student_code?: string; message: string }[];
+      }>({
         url: "/students/import-csv/",
         method: "POST",
         data: form,
         headers: { "Content-Type": "multipart/form-data" },
       });
       await toastSuccess(envelope.message);
-      if (data.failed.length > 0) {
-        await alertError(
-          `นำเข้าสำเร็จ ${data.created} รายการ แต่มี ${data.failed.length} บรรทัดไม่ผ่าน`,
-          data.failed.map((e) => `แถว ${e.row}: ${e.message}`).join("\n"),
+      const parts: string[] = [];
+      if (data.failed?.length) {
+        parts.push(`ข้อมูล CSV ไม่ผ่าน ${data.failed.length} รายการ:\n` + data.failed.map((e) => `แถว ${e.row}: ${e.message}`).join("\n"));
+      }
+      if (data.provision_failed?.length) {
+        parts.push(
+          `สร้างใน SAMS แล้ว แต่ Keycloak ไม่สำเร็จ ${data.provision_failed.length} รายการ:\n` +
+            data.provision_failed
+              .map((e) => `แถว ${e.row} (${e.username || e.student_code || "-"}): ${e.message}`)
+              .join("\n"),
         );
+      }
+      if (parts.length > 0) {
+        await alertError(`สรุปผลนำเข้า (สำเร็จ ${data.created} รายการ)`, parts.join("\n\n"));
       }
       setCsvFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -299,6 +321,20 @@ export default function AdminStudentsPage() {
                   </p>
                 )}
               </div>
+
+              <label className="flex items-start gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={autoProvisionKeycloak}
+                  onChange={(e) => setAutoProvisionKeycloak(e.target.checked)}
+                  disabled={importing}
+                  className="mt-1 h-4 w-4 rounded border-slate-300"
+                />
+                <span>
+                  <span className="font-medium">Auto-Provision ไปยัง Keycloak (CSV)</span>
+                  <span className="block text-xs text-slate-500">สร้างบัญชีใน Keycloak และผูก ExternalIdentity ต่อแถวที่สร้าง SAMS สำเร็จ (ถ้าล้มเหลวจะรายงานรายแถว ไม่ย้อนกลับ SAMS)</span>
+                </span>
+              </label>
 
               <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
                 หลักสูตรและกลุ่มเรียนที่เลือกจะถูกกำหนดให้นักศึกษาทุกคนในไฟล์นี้
